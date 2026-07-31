@@ -1,0 +1,14 @@
+schema_version: 1
+data_config: ../data/schema.yaml
+model_config: ../model/schema.yaml
+seed: null
+budget:
+  batch_size: null
+  learning_rate: null
+  amp: null
+  workers: null
+order_controls:
+  K2: [forward, reverse]
+  K3: all_six_permutations
+output_dir: local/outputs
+real_training_permitted: false

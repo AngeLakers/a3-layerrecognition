@@ -1,0 +1,15 @@
+# Minimal A3 V1.1 runtime and test dependencies for the registered Conda interpreter.
+# The CUDA wheel is selected explicitly for the local RTX-class GPU.
+--extra-index-url https://download.pytorch.org/whl/cu126
+
+torch==2.12.1+cu126
+torchvision==0.27.1+cu126
+numpy==2.4.6
+scipy==1.17.1
+pandas==3.0.3
+PyYAML==6.0.3
+scikit-learn==1.7.2
+pytest==9.1.1
+psutil==7.2.2
+pytorch-tcn==1.2.3
+tsai==1.0.1

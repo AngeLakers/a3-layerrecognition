@@ -1,0 +1,31 @@
+schema_version: 1
+raw_rf:
+  layout: [B, T]
+  dtype: float32
+  phase_preserving: true
+length_mask:
+  layout: [B, T]
+  dtype: bool
+interfaces:
+  metadata_schema: a3-interface-meta-v3
+  metadata_layout: [B, Kmax, 5]
+  metadata_order: [k_over_K, tau_over_T, z_over_zmax, delta_minus_over_T, delta_plus_over_T]
+  query_field_indices: [0, 1, 2]
+  prior_field_indices: [1, 3, 4]
+  interface_mask_layout: [B, Kmax]
+  label_mask_layout: [B, Kmax]
+  normalization_denominators:
+    time: per_trace_valid_sample_count
+    depth: per_batch_structure_total_thickness_mm
+windows:
+  source: acquisition_profile_shared_window
+  per_interface_override: forbidden
+  local_prior: gaussian_centered_on_nominal_tof_within_frozen_window
+time_prior:
+  nominal_tof_source: batch_reference_plus_geometry_and_sound_speed
+  batch_reference_count_per_batch: 1
+  homogeneous_formula: b_ref_plus_2_fs_z_over_c
+  layered_formula: b_ref_plus_2_fs_sum_d_over_c
+splits:
+  manifest: null
+  unit: specimen

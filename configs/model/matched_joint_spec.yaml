@@ -1,0 +1,91 @@
+schema_version: a3-matched-joint-spec-v1
+status: frozen_for_structural_capacity_matching
+evidence_scope: structure_and_parameter_count_only
+real_training_permitted: false
+
+state_space:
+  labels:
+    good: 0
+    abnormal: 1
+  supported_K: [2, 3]
+  max_interfaces: 3
+  path_order: lexicographic_binary
+
+shared_with_pcc:
+  input_whitelist: [x_raw, length_mask, interface_meta, interface_mask]
+  modules:
+    - backbone
+    - query_encoder
+    - local_indexed_readout
+    - pre_interface_indexed_readout
+    - responsibility_token_projector
+    - local_base_branch
+  normalization_choice: same_for_pcc_and_matched_joint
+  local_auxiliary_loss: required
+  class_weights: shared
+  lambda_local_candidates: [0.1, 0.3, 1.0]
+  lambda_local_zero_role: ablation_only
+
+decoder:
+  interface_fusion:
+    formula: u_k = Linear(concat[r_loc_k, r_ctx_k, r_gate_k])
+    input_order: [r_loc, r_ctx, r_gate]
+    output_dim_rule: equals_token_dim
+    shared_across_interfaces_and_K: true
+  ordered_flatten:
+    valid_prefix_only: true
+    padding_slots_excluded: true
+    K_specific_input_width: true
+  joint_branches:
+    K2:
+      input: flatten[u_1, u_2]
+      architecture: Linear-GELU-Linear
+      output_logits: 4
+    K3:
+      input: flatten[u_1, u_2, u_3]
+      architecture: Linear-GELU-Linear
+      output_logits: 8
+  probability_normalization: log_softmax_over_valid_joint_states
+  outputs: [joint_log_probabilities, joint_probabilities, map_state, interface_marginals]
+  forbidden_inputs: [labels, specimen_id, batch_id, scan_coordinates, absolute_interface_id]
+
+loss:
+  primary: flat_joint_nll
+  normalization: per_scan_valid_interface_count
+  total: flat_joint_nll_plus_shared_lambda_local_times_local_base_loss
+  calibration_and_test_forbidden_for_selection: true
+
+capacity_match:
+  comparison_scope: all_trainable_head_parameters_including_shared_projector_and_local_base
+  tolerance_relative: 0.10
+  reference_dimensions:
+    feature_dim: 32
+    query_dim: 32
+    token_dim: 32
+    prefix_dim: 32
+    pcc_hidden_dim: 64
+    max_interfaces: 3
+    joint_fusion_dim: 32
+  joint_hidden_width_search:
+    minimum: 1
+    maximum: 512
+    shared_for_K2_and_K3: true
+    objective: minimize_absolute_relative_parameter_difference
+    tie_break: smaller_width
+    reads_labels_or_validation_metrics: false
+
+initialization_and_optimization:
+  shared_specification_seed_matched: true
+  shared_parameter_values_equal_at_initialization: true
+  parameter_objects_independent: true
+  optimizer_states_independent: true
+  post_initialization_weight_sharing: forbidden
+
+budget_fairness:
+  optimizer_family: shared
+  scheduler: shared
+  max_epochs: shared
+  early_stopping_metric: shared
+  seed_set: shared
+  search_trial_count_relative_tolerance: 0.10
+  gpu_time_relative_tolerance: 0.10

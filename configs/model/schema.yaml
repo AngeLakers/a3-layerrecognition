@@ -1,0 +1,44 @@
+schema_version: 3
+backbone_noncausal:
+  kernel: null
+  stride: null
+  channels: null
+  stages: null
+indexed_readout:
+  attention_dim: null
+  local_branch: query_conditioned_masked_attention
+  pre_interface_branch: feature_only_masked_attention
+  empty_pre_support: learnable_empty_context
+interface_query:
+  metadata_schema: a3-interface-meta-v3
+  metadata_fields: 5
+  query_fields: [k_over_K, tau_over_T, z_over_zmax]
+  output_layer_norm: forbidden
+  absolute_interface_id_embedding: false
+responsibility_tokens:
+  source_projections: independent
+  layer_norms: independent
+  post_norm_interface_mask: required
+  token_dim_minimum_exclusive: 1
+scalar_pcc_head:
+  rho_validation_sweep: null
+  rho_must_be_finite_and_positive: true
+  correction_reads_local_representation_directly: false
+  gate_reads_prefix: false
+  prefix_encoder: ordered_masked_two_layer_mlp
+  prefix_max_interfaces: 3
+exact_enumerator:
+  role: deterministic_inference_utility
+  max_interfaces: 3
+  normalization: explicit_logsumexp
+loss:
+  normalization: per_scan_valid_interface_count
+  label_mask_controls_terms: true
+matched_joint_baseline:
+  local_auxiliary_supervision: required
+  frozen_structure_spec: matched_joint_spec.yaml
+  capacity_match_before_training: required
+shortcut_baselines:
+  query_only: required
+  train_prior: required
+  absolute_id: required

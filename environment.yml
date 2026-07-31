@@ -1,0 +1,19 @@
+name: aislee-a3-layercongition
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11.15
+  - pip=26.1.2
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu126
+      - torch==2.12.1+cu126
+      - torchvision==0.27.1+cu126
+      - numpy==2.4.6
+      - scipy==1.17.1
+      - pandas==3.0.3
+      - PyYAML==6.0.3
+      - scikit-learn==1.7.2
+      - pytest==9.1.1
+      - psutil==7.2.2
+      - pytorch-tcn==1.2.3
+      - tsai==1.0.1

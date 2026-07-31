@@ -1,0 +1,21 @@
+# Python caches and build products
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Local environments and secrets
+.venv/
+.env
+.env.*
+!.env.example
+local/
+profile_output/
+
+# PyCharm stores shareable project settings in .idea/.
+# Its own .idea/.gitignore excludes workspace-local state.
