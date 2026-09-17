@@ -8,9 +8,15 @@ import json
 import math
 import platform
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 import torch
 
@@ -187,6 +193,7 @@ def run(
             "denoising_applied": False,
             "source_ref": manifest["provenance"]["source_ref"],
         },
+        "input_fingerprint": result.input_fingerprint(),
         "tensor_contract": {
             "interface_meta_schema": INTERFACE_META_SCHEMA_VERSION,
             "interface_meta_fields": list(INTERFACE_META_FIELDS),

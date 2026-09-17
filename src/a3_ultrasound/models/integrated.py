@@ -8,13 +8,18 @@ import torch
 from torch import Tensor, nn
 
 from a3_ultrasound.inference.enumerator import ExactInferenceOutput, enumerate_pcc
-from a3_ultrasound.models.backbone import BackboneOutput, LengthGroupedTCNBackbone
+from a3_ultrasound.models.backbone import (
+    BackboneOutput,
+    CommonTemporalBackboneAdapter,
+)
 from a3_ultrasound.models.indexed_readout import (
     IndexedReadout,
+    LocalTokenDiagnostics,
     ReadoutOutput,
     build_indexed_supports,
+    summarize_local_tokens,
 )
-from a3_ultrasound.models.pcc import PCCConditionalStep, PCCStepOutput
+from a3_ultrasound.models.pcc import LocalBaseType, PCCConditionalStep, PCCStepOutput
 from a3_ultrasound.models.query import InterfaceQueryEncoder
 from a3_ultrasound.models.responsibility_tokens import (
     ResponsibilityTokenProjector,
@@ -34,6 +39,7 @@ class IntegratedPCCOutput:
     local_support: Tensor
     pre_support: Tensor
     local_prior: Tensor
+    local_token_diagnostics: LocalTokenDiagnostics
     local_readout: ReadoutOutput
     pre_readout: ReadoutOutput
     responsibility_tokens: ResponsibilityTokens
@@ -51,14 +57,17 @@ class A3PCCModel(nn.Module):
     def __init__(
         self,
         *,
-        backbone: LengthGroupedTCNBackbone,
+        backbone: nn.Module,
         query_dim: int,
         attention_dim: int,
         token_dim: int,
         prefix_dim: int,
         pcc_hidden_dim: int,
-        max_interfaces: int = 3,
+        common_feature_dim: int = 64,
+        max_interfaces: int = 6,
         rho: float = 1.0,
+        local_base_type: LocalBaseType = "mlp",
+        local_base_hidden_dim: int = 32,
     ) -> None:
         super().__init__()
         if any(
@@ -69,28 +78,35 @@ class A3PCCModel(nn.Module):
                 token_dim,
                 prefix_dim,
                 pcc_hidden_dim,
+                common_feature_dim,
                 max_interfaces,
             )
         ):
             raise ValueError("All model dimensions and max_interfaces must be positive integers.")
 
-        feature_dim = backbone.output_dim
+        feature_dim = getattr(backbone, "output_dim", None)
+        if not isinstance(feature_dim, int) or isinstance(feature_dim, bool) or feature_dim <= 0:
+            raise ValueError("backbone must expose one positive integer output_dim.")
         self.max_interfaces = max_interfaces
         self.backbone = backbone
+        self.backbone_adapter = CommonTemporalBackboneAdapter(
+            feature_dim,
+            common_feature_dim,
+        )
         self.query_encoder = InterfaceQueryEncoder(query_dim=query_dim)
         self.local_readout = IndexedReadout(
-            feature_dim=feature_dim,
+            feature_dim=common_feature_dim,
             query_dim=query_dim,
             attention_dim=attention_dim,
         )
         self.pre_readout = IndexedReadout(
-            feature_dim=feature_dim,
+            feature_dim=common_feature_dim,
             query_dim=None,
             attention_dim=attention_dim,
         )
         self.responsibility_projector = ResponsibilityTokenProjector(
-            local_dim=feature_dim,
-            context_dim=feature_dim,
+            local_dim=common_feature_dim,
+            context_dim=common_feature_dim,
             query_dim=query_dim,
             token_dim=token_dim,
         )
@@ -103,6 +119,8 @@ class A3PCCModel(nn.Module):
             hidden_dim=pcc_hidden_dim,
             max_interfaces=max_interfaces,
             rho=rho,
+            local_base_type=local_base_type,
+            local_base_hidden_dim=local_base_hidden_dim,
         )
 
     def forward(
@@ -113,7 +131,8 @@ class A3PCCModel(nn.Module):
         """Run one truth-prefix or explicitly supplied conditional path."""
 
         self._validate_structural_inputs(batch, prefix_states)
-        backbone_output = self.backbone(batch.x_raw, batch.length_mask)
+        raw_backbone_output = self.backbone(batch.x_raw, batch.length_mask)
+        backbone_output = self.backbone_adapter(raw_backbone_output)
         query = self.query_encoder(batch.interface_meta, batch.interface_mask)
         window_start, window_end, nominal_tof = self._sample_windows(batch)
         local_support, pre_support, local_prior = build_indexed_supports(
@@ -123,6 +142,10 @@ class A3PCCModel(nn.Module):
             backbone_output.feature_mask,
             batch.interface_mask,
             prior_center=nominal_tof,
+        )
+        local_token_diagnostics = summarize_local_tokens(
+            local_support,
+            batch.interface_mask,
         )
         local_output = self.local_readout(
             backbone_output.features,
@@ -160,6 +183,7 @@ class A3PCCModel(nn.Module):
             local_support=local_support,
             pre_support=pre_support,
             local_prior=local_prior,
+            local_token_diagnostics=local_token_diagnostics,
             local_readout=local_output,
             pre_readout=pre_output,
             responsibility_tokens=tokens,
@@ -167,7 +191,7 @@ class A3PCCModel(nn.Module):
         )
 
     def infer_exact(self, batch: InterfaceBatch) -> ExactInferenceOutput:
-        """Run the canonical K=2/3 exact inference through the full model path."""
+        """Run exact inference for the engineering range 1 <= K <= 6."""
 
         reference_prefix = torch.zeros_like(batch.interface_mask, dtype=torch.long)
         encoded = self.forward(batch, reference_prefix)

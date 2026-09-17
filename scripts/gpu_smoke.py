@@ -191,7 +191,7 @@ def build_modules(
             query_dim=query_dim,
             prefix_dim=32,
             hidden_dim=64,
-            max_interfaces=3,
+            max_interfaces=6,
             rho=1.0,
         ),
     }

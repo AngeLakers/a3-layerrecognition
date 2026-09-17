@@ -80,8 +80,8 @@ def test_collate_derives_v3_metadata_and_variable_length_masks() -> None:
         [True] * 16,
     ]
     assert batch.interface_mask.tolist() == [
-        [True, True, False],
-        [True, True, False],
+        [True, True, False, False, False, False],
+        [True, True, False, False, False, False],
     ]
     torch.testing.assert_close(
         batch.interface_meta[0, 0],
@@ -91,13 +91,16 @@ def test_collate_derives_v3_metadata_and_variable_length_masks() -> None:
         batch.interface_meta[1, 1],
         torch.tensor([1.0, 8 / 16, 6 / 9, 1 / 16, 1 / 16]),
     )
-    assert torch.count_nonzero(batch.interface_meta[:, 2]) == 0
+    assert torch.count_nonzero(batch.interface_meta[:, 2:]) == 0
     assert batch.y is not None
     assert batch.label_mask is not None
-    assert batch.y.tolist() == [[0, 1, 0], [1, 0, 0]]
+    assert batch.y.tolist() == [
+        [0, 1, 0, 0, 0, 0],
+        [1, 0, 0, 0, 0, 0],
+    ]
     assert batch.label_mask.tolist() == [
-        [True, False, False],
-        [True, True, False],
+        [True, False, False, False, False, False],
+        [True, True, False, False, False, False],
     ]
 
 
@@ -151,12 +154,12 @@ def test_valid_metadata_is_invariant_to_padding_kmax() -> None:
     padded, padded_mask = derive_interface_tensors(
         _manifest(),
         trace_length=16,
-        kmax=3,
+        kmax=6,
     )
     torch.testing.assert_close(padded[:2], compact)
     assert compact_mask.tolist() == [True, True]
-    assert padded_mask.tolist() == [True, True, False]
-    assert torch.count_nonzero(padded[2]) == 0
+    assert padded_mask.tolist() == [True, True, False, False, False, False]
+    assert torch.count_nonzero(padded[2:]) == 0
 
 
 def test_batch_reference_dual_representation_and_window_bounds_fail_fast() -> None:

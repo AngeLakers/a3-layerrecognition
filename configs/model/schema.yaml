@@ -1,43 +1,105 @@
-schema_version: 3
-backbone_noncausal:
-  kernel: null
-  stride: null
-  channels: null
-  stages: null
+schema_version: 4
+architecture_version: a3-v1.2
+
+backbone:
+  formal_training_candidates: [resnet1d, inceptiontime, fcn1d]
+  smoke_only: [tcn]
+  feature_stage:
+    default: final_pre_pool
+    configurable_when_wrapper_exposes: [stage1, stage2, stage3, final_pre_pool]
+  global_pooling_in_a3_path: forbidden
+  native_temporal_length_preserved: true
+  temporal_interpolation: forbidden
+  exact_feature_centers: required
+  padding_isolation_test: required
+
+backbone_adapter:
+  common_feature_dim: 64
+  changes_channels_only: true
+  preserves_feature_centers: true
+  preserves_feature_mask: true
+  local_token_diagnostics: required
+
+reference_dimensions:
+  query_hidden_dim: 32
+  query_output_dim: 32
+  attention_dim: 64
+  token_dim: 32
+  state_embedding_dim: 32
+  prefix_gru_hidden_dim: 32
+  correction_hidden_dim: 64
+  gate_hidden_dim: 64
+  local_base: [32, 32, 1]
+
 indexed_readout:
-  attention_dim: null
+  attention_dim: 64
   local_branch: query_conditioned_masked_attention
+  local_empty_support: fail_fast
   pre_interface_branch: feature_only_masked_attention
   empty_pre_support: learnable_empty_context
+
 interface_query:
   metadata_schema: a3-interface-meta-v3
   metadata_fields: 5
   query_fields: [k_over_K, tau_over_T, z_over_zmax]
   output_layer_norm: forbidden
   absolute_interface_id_embedding: false
+  K_cap_input: forbidden
+
 responsibility_tokens:
   source_projections: independent
   layer_norms: independent
   post_norm_interface_mask: required
+  token_dim: 32
   token_dim_minimum_exclusive: 1
-scalar_pcc_head:
-  rho_validation_sweep: null
+
+structured_head:
+  name: propagation_conditioned_structured_head
+  classifier_chain_factorization_claimed_as_original: false
+  rho_validation_candidates: [1.0, 2.0, 3.0]
   rho_must_be_finite_and_positive: true
   correction_reads_local_representation_directly: false
   gate_reads_prefix: false
-  prefix_encoder: ordered_masked_two_layer_mlp
-  prefix_max_interfaces: 3
+  prefix_encoder: shared_gru_cell
+  prefix_hidden_dim: 32
+  state_embedding_dim: 32
+  trainable_parameters_depend_on_K: false
+  engineering_K_cap: 6
+  validated_real_specimen_K: [2, 3]
+  local_base:
+    default: mlp
+    hidden_dim: 32
+    linear_variant: ablation
+
 exact_enumerator:
   role: deterministic_inference_utility
-  max_interfaces: 3
+  engineering_K_cap: 6
+  complexity: O(2^K)
   normalization: explicit_logsumexp
+
 loss:
-  normalization: per_scan_valid_interface_count
+  normalization: per_supervised_sample_supervised_interface_count
+  equal_weight_for_each_supervised_sample: true
   label_mask_controls_terms: true
-matched_joint_baseline:
-  local_auxiliary_supervision: required
-  frozen_structure_spec: matched_joint_spec.yaml
-  capacity_match_before_training: required
+  local_auxiliary_loss:
+    independent: primary_local_base_only
+    vanilla_classifier_chain: required
+    propagation_conditioned: required
+    lambda_validation_candidates: [0.1, 0.3, 1.0]
+    lambda_shared_for_vanilla_and_proposed: true
+
+head_baselines:
+  required: [independent, vanilla_classifier_chain, propagation_conditioned]
+  optional_small_K: [flat_joint]
+  legacy_matched_joint_spec: matched_joint_spec.yaml
+  local_base:
+    architecture: identical_per_model_instance
+    weight_sharing_between_models: forbidden
+  vanilla_classifier_chain:
+    conditional_inputs: [r_loc, r_ctx, prefix_hidden]
+    direct_query_to_classifier: forbidden
+    gate_token_input: forbidden
+
 shortcut_baselines:
   query_only: required
   train_prior: required

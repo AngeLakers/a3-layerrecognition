@@ -87,6 +87,13 @@ def test_real_rf_batch_uses_one_fixed_divisor_and_has_no_labels(tmp_path: Path) 
     assert result.normalization_divisor == 2.0
     assert result.raw_min == -8
     assert result.raw_max == 11
+    fingerprint = result.input_fingerprint()
+    assert fingerprint["trace_count"] == 5
+    assert len(fingerprint["raw_trace_content_sha256"]) == 5
+    assert len(set(fingerprint["raw_trace_content_sha256"])) == 5
+    assert len(fingerprint["normalized_batch_sha256"]) == 64
+    assert len(fingerprint["aggregate_sha256"]) == 64
+    assert fingerprint["contains_filenames_or_coordinates"] is False
     assert batch.x_raw.shape == (5, 16)
     assert batch.x_raw.dtype == torch.float32
     torch.testing.assert_close(
@@ -94,7 +101,9 @@ def test_real_rf_batch_uses_one_fixed_divisor_and_has_no_labels(tmp_path: Path) 
         torch.arange(-8, 8, dtype=torch.float32) / 2.0,
     )
     assert batch.length_mask.all()
-    assert batch.interface_mask.tolist() == [[True, True, False]] * 5
+    assert batch.interface_mask.tolist() == [
+        [True, True, False, False, False, False]
+    ] * 5
     assert batch.y is None
     assert batch.label_mask is None
 

@@ -1,7 +1,9 @@
 schema_version: a3-matched-joint-spec-v1
-status: frozen_for_structural_capacity_matching
+status: superseded_optional_small_k_reference_pending_archive
 evidence_scope: structure_and_parameter_count_only
 real_training_permitted: false
+required_for_primary_hypothesis: false
+superseded_by_architecture: a3-v1.2
 
 state_space:
   labels:

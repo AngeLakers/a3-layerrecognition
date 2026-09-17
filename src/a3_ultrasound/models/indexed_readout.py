@@ -14,12 +14,23 @@ class ReadoutOutput:
     attention: Tensor
 
 
+@dataclass(frozen=True)
+class LocalTokenDiagnostics:
+    counts: Tensor
+    minimum: Tensor
+    mean: Tensor
+    median: Tensor
+    maximum: Tensor
+    fraction_le_1: Tensor
+    fraction_le_2: Tensor
+
+
 def conv1d_feature_centers(
     input_length: int,
     *,
     kernel_size: int,
     stride: int,
-    padding: int,
+    padding: int | tuple[int, int],
     dilation: int = 1,
     device: torch.device | None = None,
 ) -> Tensor:
@@ -30,14 +41,33 @@ def conv1d_feature_centers(
     until its kernel stack is frozen by RF/environment smoke.
     """
 
-    if min(input_length, kernel_size, stride, dilation) <= 0 or padding < 0:
+    if (
+        isinstance(padding, int)
+        and not isinstance(padding, bool)
+        and padding >= 0
+    ):
+        padding_left = padding_right = padding
+    elif (
+        isinstance(padding, tuple)
+        and len(padding) == 2
+        and all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in padding
+        )
+    ):
+        padding_left, padding_right = padding
+    else:
+        raise ValueError("padding must be one nonnegative int or a (left, right) pair.")
+    if min(input_length, kernel_size, stride, dilation) <= 0:
         raise ValueError("Conv1d geometry values must be valid positive integers.")
     receptive_width = dilation * (kernel_size - 1) + 1
-    output_length = (input_length + 2 * padding - receptive_width) // stride + 1
+    output_length = (
+        input_length + padding_left + padding_right - receptive_width
+    ) // stride + 1
     if output_length <= 0:
         raise ValueError("Conv1d geometry produces no output features.")
     index = torch.arange(output_length, device=device, dtype=torch.float32)
-    return index * stride - padding + (receptive_width - 1) / 2.0
+    return index * stride - padding_left + (receptive_width - 1) / 2.0
 
 
 def build_indexed_supports(
@@ -94,6 +124,32 @@ def build_indexed_supports(
     return local_mask, pre_mask, local_prior
 
 
+def summarize_local_tokens(
+    local_support: Tensor,
+    interface_mask: Tensor,
+) -> LocalTokenDiagnostics:
+    """Summarize the actual feature-token resolution of valid Local windows."""
+
+    if local_support.ndim != 3 or local_support.dtype != torch.bool:
+        raise ValueError("local_support must be bool with shape [B, Kmax, L].")
+    if interface_mask.shape != local_support.shape[:2] or interface_mask.dtype != torch.bool:
+        raise ValueError("interface_mask must be bool with shape [B, Kmax].")
+    counts = local_support.sum(dim=-1)
+    valid_counts = counts[interface_mask]
+    if valid_counts.numel() == 0:
+        raise ValueError("Local token diagnostics require at least one valid interface.")
+    values = valid_counts.to(dtype=torch.float32)
+    return LocalTokenDiagnostics(
+        counts=counts,
+        minimum=values.min(),
+        mean=values.mean(),
+        median=values.median(),
+        maximum=values.max(),
+        fraction_le_1=(values <= 1).to(dtype=torch.float32).mean(),
+        fraction_le_2=(values <= 2).to(dtype=torch.float32).mean(),
+    )
+
+
 class IndexedReadout(nn.Module):
     """One masked-attention branch with explicit Query responsibility.
 
@@ -117,7 +173,10 @@ class IndexedReadout(nn.Module):
         )
         self.score_projection = nn.Linear(attention_dim, 1, bias=False)
         self.score_bias = nn.Parameter(torch.zeros(attention_dim))
-        self.empty_context = nn.Parameter(torch.zeros(feature_dim))
+        if query_dim is None:
+            self.empty_context = nn.Parameter(torch.zeros(feature_dim))
+        else:
+            self.register_parameter("empty_context", None)
 
     def forward(
         self,
@@ -167,6 +226,10 @@ class IndexedReadout(nn.Module):
 
         empty_context = interface_mask & ~has_support
         if allow_empty_context:
+            if self.empty_context is None:
+                raise ValueError(
+                    "Only the query-free Pre-interface branch owns empty_context."
+                )
             token = torch.where(empty_context.unsqueeze(-1), self.empty_context.view(1, 1, -1), token)
         token = token * interface_mask.unsqueeze(-1).to(dtype=token.dtype)
         return ReadoutOutput(token=token, attention=attention)

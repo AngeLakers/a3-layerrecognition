@@ -13,7 +13,7 @@ FIXED_TIME = "2026-07-24T00:00:00+00:00"
 
 def _manifest() -> dict:
     return {
-        "schema_version": "a3-acquisition-metadata-v1",
+        "schema_version": "a3-acquisition-metadata-v2",
         "identity": {
             "dataset_id": "ds_test",
             "specimen_id": "sp_test",
@@ -58,7 +58,12 @@ def _manifest() -> dict:
 
 
 def _schema() -> dict:
-    return {"schema_version": "a3-smoke-summary-v1"}
+    return {
+        "schema_version": "a3-smoke-summary-v1",
+        "input_contract": {
+            "metadata_schema": "a3-acquisition-metadata-v2",
+        },
+    }
 
 
 def _config() -> dict:
@@ -148,6 +153,23 @@ def test_valid_scan_is_label_free_and_privacy_safe(tmp_path: Path) -> None:
     assert summary_a["contract"]["absolute_paths_absent_from_summary"] is True
     assert str(tmp_path) not in str(summary_a)
     assert summary_a["outcome"]["overall_status"] == "INCOMPLETE"
+
+
+def test_metadata_schema_version_must_match_smoke_input_contract(
+    tmp_path: Path,
+) -> None:
+    _valid_grid(tmp_path)
+    manifest = _manifest()
+    manifest["schema_version"] = "a3-acquisition-metadata-v1"
+
+    with pytest.raises(ValueError, match="must match smoke input contract"):
+        scan_label_free(
+            tmp_path,
+            manifest,
+            _schema(),
+            _config(),
+            generated_at=FIXED_TIME,
+        )
 
 
 def test_regular_grid_stride_samples_content_but_inventories_full_grid(

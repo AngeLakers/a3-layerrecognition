@@ -142,7 +142,7 @@ def _build_model(device: torch.device) -> A3PCCModel:
         token_dim=32,
         prefix_dim=32,
         pcc_hidden_dim=64,
-        max_interfaces=3,
+        max_interfaces=6,
         rho=1.0,
     ).to(device)
 

@@ -1,40 +1,73 @@
 """A3 model-side structural components."""
 
-from .backbone import BackboneOutput, LengthGroupedTCNBackbone
+from .backbone import (
+    BackboneOutput,
+    CommonTemporalBackboneAdapter,
+    LengthGroupedTCNBackbone,
+    TemporalBackboneOutput,
+    TsaiFeatureStage,
+    TsaiTimePreservingBackbone,
+)
+from .baselines import IndependentConditionalStep, VanillaClassifierChainStep
 from .capacity import (
+    BaselineHeadCapacity,
     CapacityMatch,
     HeadCapacity,
+    head_baseline_parameter_counts,
     matched_joint_head_parameter_count,
     pcc_head_parameter_count,
     responsibility_projector_parameter_count,
     select_matched_joint_hidden_width,
 )
 from .integrated import A3PCCModel, IntegratedPCCOutput
-from .indexed_readout import IndexedReadout, ReadoutOutput, build_indexed_supports
+from .indexed_readout import (
+    IndexedReadout,
+    LocalTokenDiagnostics,
+    ReadoutOutput,
+    build_indexed_supports,
+    summarize_local_tokens,
+)
 from .losses import PCCLossOutput, pcc_training_loss
-from .pcc import PCCConditionalStep, PCCStepOutput
+from .pcc import (
+    LocalBaseScorer,
+    PCCConditionalStep,
+    PCCStepOutput,
+    SharedPrefixGRUEncoder,
+)
 from .query import InterfaceQueryEncoder
 from .responsibility_tokens import ResponsibilityTokenProjector, ResponsibilityTokens
 
 __all__ = [
     "A3PCCModel",
     "BackboneOutput",
+    "BaselineHeadCapacity",
+    "CommonTemporalBackboneAdapter",
     "CapacityMatch",
     "HeadCapacity",
     "IndexedReadout",
+    "IndependentConditionalStep",
     "IntegratedPCCOutput",
     "InterfaceQueryEncoder",
     "LengthGroupedTCNBackbone",
+    "LocalBaseScorer",
+    "LocalTokenDiagnostics",
     "PCCConditionalStep",
     "PCCLossOutput",
     "PCCStepOutput",
     "ReadoutOutput",
     "ResponsibilityTokenProjector",
     "ResponsibilityTokens",
+    "SharedPrefixGRUEncoder",
+    "TemporalBackboneOutput",
+    "TsaiFeatureStage",
+    "TsaiTimePreservingBackbone",
+    "VanillaClassifierChainStep",
     "build_indexed_supports",
+    "head_baseline_parameter_counts",
     "matched_joint_head_parameter_count",
     "pcc_head_parameter_count",
     "pcc_training_loss",
     "responsibility_projector_parameter_count",
     "select_matched_joint_hidden_width",
+    "summarize_local_tokens",
 ]

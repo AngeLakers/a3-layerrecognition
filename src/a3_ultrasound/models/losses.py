@@ -1,4 +1,4 @@
-"""Per-A-scan normalized losses for the A3 PCC training contract."""
+"""Equal-supervised-sample losses for the A3 V1.2 training contract."""
 
 from __future__ import annotations
 
@@ -34,10 +34,9 @@ def pcc_training_loss(
 ) -> PCCLossOutput:
     """Compute truth-prefix PCC and local losses on the frozen scale.
 
-    Each A-scan is divided by its physical valid-interface count ``K_i`` before
-    averaging across samples that contain at least one supervised interface.
-    ``label_mask`` controls which terms contribute but does not redefine
-    ``K_i``.
+    Each supervised A-scan is divided by its supervised-interface count
+    ``N_i^sup`` before averaging, so every sample with at least one reliable
+    label has equal weight even when ``label_mask`` is partial.
     """
 
     if conditional_logits.ndim != 2:
@@ -101,10 +100,11 @@ def pcc_training_loss(
         pos_weight=pos_weight,
     )
     active = supervision_mask.to(dtype=conditional_logits.dtype)
-    valid_counts = interface_mask.sum(dim=1).to(dtype=conditional_logits.dtype)
-    per_sample_chain = (chain_terms * active).sum(dim=1) / valid_counts
-    per_sample_local = (local_terms * active).sum(dim=1) / valid_counts
+    supervised_counts = supervision_mask.sum(dim=1).to(dtype=conditional_logits.dtype)
     supervised_sample_mask = supervision_mask.any(dim=1)
+    safe_counts = supervised_counts.clamp_min(1.0)
+    per_sample_chain = (chain_terms * active).sum(dim=1) / safe_counts
+    per_sample_local = (local_terms * active).sum(dim=1) / safe_counts
     chain = per_sample_chain[supervised_sample_mask].mean()
     local = per_sample_local[supervised_sample_mask].mean()
     total = chain + resolved_lambda * local

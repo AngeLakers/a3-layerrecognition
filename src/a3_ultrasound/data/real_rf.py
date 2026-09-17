@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -51,6 +53,26 @@ class LabelFreeRealRFBatch:
     normalization_divisor: float
     raw_min: int
     raw_max: int
+    raw_trace_content_sha256: tuple[str, ...]
+    normalized_batch_sha256: str
+
+    def input_fingerprint(self) -> dict[str, Any]:
+        """Return a path/coordinate-free digest of the exact RF content used."""
+
+        body = {
+            "algorithm": "sha256",
+            "trace_count": self.trace_count,
+            "raw_trace_content_sha256": list(self.raw_trace_content_sha256),
+            "normalized_batch_sha256": self.normalized_batch_sha256,
+            "contains_filenames_or_coordinates": False,
+        }
+        canonical = json.dumps(body, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        return {
+            **body,
+            "aggregate_sha256": hashlib.sha256(canonical).hexdigest(),
+        }
 
 
 def load_label_free_network_manifest(
@@ -151,12 +173,14 @@ def build_label_free_real_rf_batch(
     _validate_coordinates(selected, manifest)
 
     traces: list[Tensor] = []
+    trace_content_hashes: list[str] = []
     trace_lengths: list[int] = []
     raw_min: int | None = None
     raw_max: int | None = None
     for coordinate in selected:
         path = _resolve_trace_path(root, file_pattern, coordinate)
-        raw_values = _read_strict_integer_trace(path)
+        raw_values, raw_content_sha256 = _read_strict_integer_trace(path)
+        trace_content_hashes.append(raw_content_sha256)
         trace_lengths.append(len(raw_values))
         current_min = min(raw_values)
         current_max = max(raw_values)
@@ -189,6 +213,8 @@ def build_label_free_real_rf_batch(
         normalization_divisor=divisor,
         raw_min=raw_min,
         raw_max=raw_max,
+        raw_trace_content_sha256=tuple(trace_content_hashes),
+        normalized_batch_sha256=_tensor_sha256(batch.x_raw),
     )
 
 
@@ -275,19 +301,31 @@ def _resolve_trace_path(
     return path
 
 
-def _read_strict_integer_trace(path: Path) -> list[int]:
+def _read_strict_integer_trace(path: Path) -> tuple[list[int], str]:
     try:
-        tokens = path.read_text(encoding="utf-8").split()
+        raw_bytes = path.read_bytes()
+        tokens = raw_bytes.decode("utf-8").split()
     except (OSError, UnicodeError) as exc:
         raise RealRFLoadError("a selected trace file is not readable UTF-8 text.") from exc
     if not tokens:
         raise RealRFLoadError("a selected trace file is empty.")
     try:
-        return [int(token, 10) for token in tokens]
+        return [int(token, 10) for token in tokens], hashlib.sha256(raw_bytes).hexdigest()
     except ValueError as exc:
         raise RealRFLoadError(
             "a selected trace contains a non-integer token."
         ) from exc
+
+
+def _tensor_sha256(tensor: Tensor) -> str:
+    canonical = tensor.detach().cpu().contiguous()
+    digest = hashlib.sha256()
+    digest.update(str(canonical.dtype).encode("ascii"))
+    digest.update(b"\0")
+    digest.update(json.dumps(list(canonical.shape), separators=(",", ":")).encode("ascii"))
+    digest.update(b"\0")
+    digest.update(canonical.numpy().tobytes(order="C"))
+    return digest.hexdigest()
 
 
 def _require_mapping(

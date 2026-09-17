@@ -3,12 +3,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 import torch
 from torch import Tensor
 from torch.nn import functional as F
 
-from a3_ultrasound.models.pcc import PCCConditionalStep
+
+class ConditionalLogitOutput(Protocol):
+    logits: Tensor
+
+
+class BinaryConditionalStep(Protocol):
+    def __call__(
+        self,
+        r_loc: Tensor,
+        r_ctx: Tensor,
+        r_gate: Tensor,
+        query: Tensor,
+        prefix_states: Tensor,
+        interface_mask: Tensor,
+    ) -> ConditionalLogitOutput: ...
 
 
 @dataclass(frozen=True)
@@ -31,8 +46,8 @@ def lexicographic_binary_paths(interface_count: int, *, device: torch.device) ->
     return ((values.unsqueeze(1) >> shifts) & 1).to(dtype=torch.long)
 
 
-def enumerate_pcc(
-    step: PCCConditionalStep,
+def enumerate_binary_chain(
+    step: BinaryConditionalStep,
     r_loc: Tensor,
     r_ctx: Tensor,
     r_gate: Tensor,
@@ -114,3 +129,16 @@ def enumerate_pcc(
         marginals=marginals,
         map_states=map_states,
     )
+
+
+# Compatibility name retained for V1.1 callers.
+enumerate_pcc = enumerate_binary_chain
+
+
+__all__ = [
+    "BinaryConditionalStep",
+    "ExactInferenceOutput",
+    "enumerate_binary_chain",
+    "enumerate_pcc",
+    "lexicographic_binary_paths",
+]

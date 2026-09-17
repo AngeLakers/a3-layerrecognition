@@ -121,6 +121,21 @@ def test_feature_centers_use_exact_conv_geometry() -> None:
     torch.testing.assert_close(centers, torch.tensor([0.0, 2.0, 4.0, 6.0, 8.0]))
 
 
+def test_feature_centers_cover_valid_and_asymmetric_padding_geometry() -> None:
+    valid = conv1d_feature_centers(8, kernel_size=3, stride=2, padding=0)
+    asymmetric = conv1d_feature_centers(
+        8,
+        kernel_size=3,
+        stride=2,
+        padding=(2, 0),
+    )
+
+    torch.testing.assert_close(valid, torch.tensor([1.0, 3.0, 5.0]))
+    torch.testing.assert_close(asymmetric, torch.tensor([-1.0, 1.0, 3.0, 5.0]))
+    with pytest.raises(ValueError, match="padding"):
+        conv1d_feature_centers(8, kernel_size=3, stride=2, padding=-1)
+
+
 def test_indexed_supports_respect_feature_padding_and_interface_mask() -> None:
     centers = torch.arange(10, dtype=torch.float32)
     starts = torch.tensor([[3.0, 7.0]])

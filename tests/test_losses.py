@@ -36,7 +36,7 @@ def test_per_scan_ki_normalization_has_k2_k3_scale_parity() -> None:
     torch.testing.assert_close(output.total, expected * 1.3)
 
 
-def test_label_mask_controls_terms_without_redefining_ki_or_padding() -> None:
+def test_partial_label_mask_keeps_each_supervised_sample_equally_weighted() -> None:
     logits = torch.zeros((2, 3), requires_grad=True)
     base = torch.zeros((2, 3), requires_grad=True)
     y = torch.tensor([[1, 0, 9], [0, 1, 0]], dtype=torch.int64)
@@ -55,7 +55,7 @@ def test_label_mask_controls_terms_without_redefining_ki_or_padding() -> None:
     expected_single = F.binary_cross_entropy_with_logits(
         torch.tensor(0.0),
         torch.tensor(1.0),
-    ) / 2.0
+    )
     torch.testing.assert_close(output.chain, expected_single)
     assert output.supervised_sample_mask.tolist() == [True, False]
     output.total.backward()

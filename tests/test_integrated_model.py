@@ -78,11 +78,15 @@ def test_integrated_model_mixed_k_forward_shapes_and_masks() -> None:
     batch, prefix_states = _mixed_k_batch()
     output = model(batch, prefix_states)
 
-    assert output.backbone.features.shape == (2, 24, 4)
+    assert output.backbone.features.shape == (2, 24, 64)
     assert output.query.shape == (2, 3, 5)
     assert output.local_support.shape == output.pre_support.shape == (2, 3, 24)
     assert output.local_prior.shape == (2, 3, 24)
-    assert output.local_readout.token.shape == output.pre_readout.token.shape == (2, 3, 4)
+    assert output.local_token_diagnostics.counts.shape == (2, 3)
+    assert output.local_token_diagnostics.minimum.item() == 3
+    assert output.local_token_diagnostics.maximum.item() == 5
+    assert output.local_token_diagnostics.fraction_le_2.item() == 0.0
+    assert output.local_readout.token.shape == output.pre_readout.token.shape == (2, 3, 64)
     assert output.responsibility_tokens.r_loc.shape == (2, 3, 7)
     assert output.responsibility_tokens.r_ctx.shape == (2, 3, 7)
     assert output.responsibility_tokens.r_gate.shape == (2, 3, 7)
@@ -200,6 +204,72 @@ def test_collate_to_model_exact_inference_pipeline_is_normalized() -> None:
             atol=1e-6,
             rtol=0.0,
         )
+
+
+def test_integrated_head_accepts_k6_without_k_dependent_weights() -> None:
+    model = _model()
+    x_raw = torch.randn((1, 48), dtype=torch.float32)
+    length_mask = torch.ones((1, 48), dtype=torch.bool)
+    interface_mask = torch.ones((1, 6), dtype=torch.bool)
+    interface_meta = torch.zeros((1, 6, 5), dtype=torch.float32)
+    for index in range(6):
+        tau = 5 + index * 7
+        interface_meta[0, index] = torch.tensor(
+            [(index + 1) / 6, tau / 48, (index + 1) / 7, 1 / 48, 1 / 48]
+        )
+    batch = InterfaceBatch(
+        x_raw=x_raw,
+        length_mask=length_mask,
+        interface_meta=interface_meta,
+        interface_mask=interface_mask,
+    )
+    parameter_shapes = {
+        name: tuple(parameter.shape) for name, parameter in model.named_parameters()
+    }
+    exact = model.infer_exact(batch)
+
+    assert exact.path_mask.sum().item() == 64
+    assert parameter_shapes == {
+        name: tuple(parameter.shape) for name, parameter in model.named_parameters()
+    }
+
+
+def test_a3_backend_capacity_is_independent_of_backbone_output_width() -> None:
+    narrow = A3PCCModel(
+        backbone=LengthGroupedTCNBackbone(
+            channels=(4,),
+            kernel_size=3,
+            dilations=(1,),
+            use_norm=None,
+        ),
+        query_dim=5,
+        attention_dim=6,
+        token_dim=7,
+        prefix_dim=4,
+        pcc_hidden_dim=8,
+    )
+    wide = A3PCCModel(
+        backbone=LengthGroupedTCNBackbone(
+            channels=(9,),
+            kernel_size=3,
+            dilations=(1,),
+            use_norm=None,
+        ),
+        query_dim=5,
+        attention_dim=6,
+        token_dim=7,
+        prefix_dim=4,
+        pcc_hidden_dim=8,
+    )
+
+    def _backend_shapes(model: A3PCCModel) -> dict[str, tuple[int, ...]]:
+        return {
+            name: tuple(parameter.shape)
+            for name, parameter in model.named_parameters()
+            if not name.startswith(("backbone.", "backbone_adapter."))
+        }
+
+    assert _backend_shapes(narrow) == _backend_shapes(wide)
 
 
 def test_truth_prefix_forward_matches_integrated_exact_enumeration() -> None:

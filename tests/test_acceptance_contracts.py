@@ -98,7 +98,7 @@ def test_analytic_pcc_count_matches_implemented_modules() -> None:
         query_dim=32,
         prefix_dim=32,
         hidden_dim=64,
-        max_interfaces=3,
+        max_interfaces=6,
     )
     actual = sum(parameter.numel() for parameter in projector.parameters()) + sum(
         parameter.numel() for parameter in pcc.parameters()
@@ -109,12 +109,12 @@ def test_analytic_pcc_count_matches_implemented_modules() -> None:
         token_dim=32,
         prefix_dim=32,
         hidden_dim=64,
-        max_interfaces=3,
+        max_interfaces=6,
     )
-    assert actual == analytic.total == 28_579
+    assert actual == analytic.total == 24_419
 
 
-def test_matched_joint_width_is_label_free_and_within_ten_percent() -> None:
+def test_optional_joint_reference_width_is_label_free_and_within_ten_percent() -> None:
     match = select_matched_joint_hidden_width(
         feature_dim=32,
         query_dim=32,
@@ -125,14 +125,14 @@ def test_matched_joint_width_is_label_free_and_within_ten_percent() -> None:
         minimum=1,
         maximum=512,
         tolerance_relative=0.10,
-        max_interfaces=3,
+        max_interfaces=6,
         supported_k=(2, 3),
     )
-    assert match.joint_hidden_dim == 103
-    assert match.pcc.total == 28_579
-    assert match.matched_joint.total == 28_527
-    assert match.absolute_difference == 52
-    assert match.relative_difference == pytest.approx(52 / 28_579)
+    assert match.joint_hidden_dim == 73
+    assert match.pcc.total == 24_419
+    assert match.matched_joint.total == 24_363
+    assert match.absolute_difference == 56
+    assert match.relative_difference == pytest.approx(56 / 24_419)
     assert match.within_tolerance
     with pytest.raises(ValueError, match="finite and nonnegative"):
         select_matched_joint_hidden_width(
@@ -146,9 +146,11 @@ def test_matched_joint_width_is_label_free_and_within_ten_percent() -> None:
         )
 
 
-def test_matched_joint_spec_freezes_fairness_and_seed_independence() -> None:
+def test_legacy_joint_spec_is_optional_and_preserves_seed_independence() -> None:
     spec = yaml.safe_load(MATCHED_JOINT_SPEC.read_text(encoding="utf-8"))
     assert spec["schema_version"] == "a3-matched-joint-spec-v1"
+    assert spec["required_for_primary_hypothesis"] is False
+    assert spec["status"] == "superseded_optional_small_k_reference_pending_archive"
     assert spec["state_space"]["supported_K"] == [2, 3]
     assert spec["decoder"]["interface_fusion"]["input_order"] == [
         "r_loc",

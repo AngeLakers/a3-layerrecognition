@@ -31,6 +31,17 @@ def _inputs(batch_size: int = 1, kmax: int = 3):
     )
 
 
+def _set_constant_base(step: PCCConditionalStep, value: float) -> None:
+    with torch.no_grad():
+        for parameter in step.base.parameters():
+            parameter.zero_()
+        final = step.base.network
+        if isinstance(final, torch.nn.Sequential):
+            final = final[-1]
+        assert isinstance(final, torch.nn.Linear)
+        final.bias.fill_(value)
+
+
 @pytest.mark.parametrize("rho", [0.0, -1.0, float("inf"), float("nan")])
 def test_pcc_rejects_nonpositive_or_nonfinite_correction_bound(rho: float) -> None:
     with pytest.raises(ValueError, match="rho"):
@@ -114,7 +125,7 @@ def test_correction_functionally_reads_only_context_and_prefix_path() -> None:
     assert not torch.allclose(baseline.correction[:, 1:], context_changed.correction[:, 1:])
 
 
-def test_prefix_mlp_is_ordered_masked_and_has_exact_zero_empty_prefix() -> None:
+def test_shared_prefix_gru_is_ordered_masked_and_has_exact_zero_empty_prefix() -> None:
     step = _step()
     _, _, _, query = _inputs()
     mask = torch.tensor([[True, True, True]])
@@ -133,7 +144,7 @@ def test_prefix_mlp_is_ordered_masked_and_has_exact_zero_empty_prefix() -> None:
     torch.testing.assert_close(history_01[:, 1], future_history[:, 1])
 
 
-def test_prefix_mlp_distinguishes_real_good_state_from_padding_and_rejects_k_above_three() -> None:
+def test_shared_prefix_gru_distinguishes_real_good_from_padding_and_supports_k6() -> None:
     step = _step()
     _, _, _, query = _inputs()
     real_good = step.prefix_history(
@@ -143,13 +154,36 @@ def test_prefix_mlp_distinguishes_real_good_state_from_padding_and_rejects_k_abo
     )
     assert torch.count_nonzero(real_good[:, 1]) > 0
 
-    too_long_query = torch.randn((1, 4, 2))
+    supported_query = torch.randn((1, 6, 2))
+    supported = step.prefix_history(
+        supported_query,
+        torch.zeros((1, 6), dtype=torch.long),
+        torch.ones((1, 6), dtype=torch.bool),
+    )
+    assert supported.shape == (1, 6, 3)
+
+    too_long_query = torch.randn((1, 7, 2))
     with pytest.raises(ValueError, match="exceeds"):
         step.prefix_history(
             too_long_query,
-            torch.zeros((1, 4), dtype=torch.long),
-            torch.ones((1, 4), dtype=torch.bool),
+            torch.zeros((1, 7), dtype=torch.long),
+            torch.ones((1, 7), dtype=torch.bool),
         )
+
+
+def test_prefix_parameters_do_not_depend_on_runtime_k() -> None:
+    step = _step()
+    before = {name: tuple(parameter.shape) for name, parameter in step.named_parameters()}
+    for k in range(1, 7):
+        _, _, _, query = _inputs(kmax=k)
+        output = step.prefix_history(
+            query,
+            torch.zeros((1, k), dtype=torch.long),
+            torch.ones((1, k), dtype=torch.bool),
+        )
+        assert output.shape == (1, k, step.prefix_dim)
+    after = {name: tuple(parameter.shape) for name, parameter in step.named_parameters()}
+    assert before == after
 
 
 def test_gate_is_path_independent_while_correction_can_depend_on_prefix() -> None:
@@ -193,9 +227,7 @@ def test_lexicographic_paths_and_order_controls_are_complete() -> None:
 
 def test_exact_enumerator_normalizes_and_matches_bruteforce_marginals() -> None:
     step = _step()
-    with torch.no_grad():
-        step.base.weight.zero_()
-        step.base.bias.fill_(0.7)
+    _set_constant_base(step, 0.7)
     r_loc, r_ctx, r_gate, query = _inputs(kmax=2)
     output = enumerate_pcc(step, r_loc, r_ctx, r_gate, query, torch.tensor([[True, True]]))
     probabilities = output.probabilities[0, output.path_mask[0]]
@@ -209,9 +241,7 @@ def test_exact_enumerator_normalizes_and_matches_bruteforce_marginals() -> None:
 
 def test_k1_degenerates_to_a_plain_bernoulli_and_map_matches_argmax() -> None:
     step = _step()
-    with torch.no_grad():
-        step.base.weight.zero_()
-        step.base.bias.fill_(-0.3)
+    _set_constant_base(step, -0.3)
     r_loc, r_ctx, r_gate, query = _inputs(kmax=1)
     output = enumerate_pcc(step, r_loc, r_ctx, r_gate, query, torch.tensor([[True]]))
     probabilities = output.probabilities[0, output.path_mask[0]]
@@ -246,6 +276,26 @@ def test_mixed_k_masks_exclude_padding_from_paths_marginals_and_probabilities() 
         torch.testing.assert_close(output.probabilities[index, output.path_mask[index]].sum(), torch.tensor(1.0), atol=1e-6, rtol=1e-6)
 
 
+def test_k6_exact_enumeration_has_64_paths_and_normalized_probability() -> None:
+    step = _step()
+    r_loc, r_ctx, r_gate, query = _inputs(kmax=6)
+    output = enumerate_pcc(
+        step,
+        r_loc,
+        r_ctx,
+        r_gate,
+        query,
+        torch.ones((1, 6), dtype=torch.bool),
+    )
+    assert output.path_mask.sum().item() == 64
+    torch.testing.assert_close(
+        output.probabilities[0, output.path_mask[0]].sum(),
+        torch.tensor(1.0),
+        atol=1e-6,
+        rtol=0.0,
+    )
+
+
 def test_padding_values_do_not_change_valid_path_distribution() -> None:
     step = _step()
     r_loc, r_ctx, r_gate, query = _inputs(kmax=3)
@@ -265,9 +315,7 @@ def test_padding_values_do_not_change_valid_path_distribution() -> None:
 
 def test_exact_enumerator_is_explicitly_normalized_for_extreme_logits() -> None:
     step = _step()
-    with torch.no_grad():
-        step.base.weight.zero_()
-        step.base.bias.fill_(1_000.0)
+    _set_constant_base(step, 1_000.0)
     r_loc, r_ctx, r_gate, query = _inputs(kmax=3)
     output = enumerate_pcc(
         step,

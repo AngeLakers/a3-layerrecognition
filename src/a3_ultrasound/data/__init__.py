@@ -2,6 +2,7 @@
 
 from .collate import (
     DEFAULT_KMAX,
+    ENGINEERING_K_CAP,
     InterfaceSample,
     NetworkApiDerivationError,
     collate_interface_samples,
@@ -29,6 +30,7 @@ from .splits import (
 
 __all__ = [
     "DEFAULT_KMAX",
+    "ENGINEERING_K_CAP",
     "DerivedTimePrior",
     "FIVE_POINT_SPATIAL_STENCIL",
     "InterfaceSample",

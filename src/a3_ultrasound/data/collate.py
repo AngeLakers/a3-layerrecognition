@@ -27,7 +27,8 @@ from a3_ultrasound.data.time_prior import (
 )
 
 
-DEFAULT_KMAX = 3
+ENGINEERING_K_CAP = 6
+DEFAULT_KMAX = ENGINEERING_K_CAP
 
 
 class NetworkApiDerivationError(ValueError):
@@ -76,9 +77,9 @@ def derive_interface_tensors(
         raise NetworkApiDerivationError(
             f"kmax={kmax} cannot hold structure.K={interface_count} valid interfaces."
         )
-    if kmax > DEFAULT_KMAX:
+    if kmax > ENGINEERING_K_CAP:
         raise NetworkApiDerivationError(
-            f"kmax>{DEFAULT_KMAX} is outside the frozen A3 V1 network contract."
+            f"kmax>{ENGINEERING_K_CAP} exceeds the A3 V1.2 engineering boundary."
         )
 
     interfaces = structure.get("interfaces")
@@ -362,6 +363,7 @@ def _optional_finite_number(
 
 __all__ = [
     "DEFAULT_KMAX",
+    "ENGINEERING_K_CAP",
     "INTERFACE_META_SCHEMA_VERSION",
     "InterfaceSample",
     "NetworkApiDerivationError",

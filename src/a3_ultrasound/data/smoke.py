@@ -80,6 +80,17 @@ def scan_label_free(
 ) -> dict[str, Any]:
     """Scan a raw TXT grid and return a JSON-serializable quality summary."""
 
+    input_contract = _require_mapping(smoke_schema, "input_contract")
+    expected_metadata_schema = input_contract.get("metadata_schema")
+    if not isinstance(expected_metadata_schema, str) or not expected_metadata_schema:
+        raise ValueError("input_contract.metadata_schema must be a non-empty string")
+    actual_metadata_schema = manifest.get("schema_version")
+    if actual_metadata_schema != expected_metadata_schema:
+        raise ValueError(
+            "manifest schema_version must match smoke input contract "
+            f"({expected_metadata_schema!r}, got {actual_metadata_schema!r})"
+        )
+
     root = Path(raw_root)
     if not root.is_dir():
         raise ValueError("raw_root must be an existing directory")
