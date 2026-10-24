@@ -31,6 +31,8 @@ class BaselineHeadCapacity:
     independent_total: int
     vanilla_total: int
     propagation_conditioned_total: int
+    local_pre_classifier: int
+    local_pre_independent_total: int
 
     def to_dict(self) -> dict[str, int]:
         return asdict(self)
@@ -208,6 +210,7 @@ def head_baseline_parameter_counts(
         hidden_dim,
     ) + _linear_parameters(hidden_dim, 1)
     gate = _linear_parameters(local_dim, hidden_dim) + _linear_parameters(hidden_dim, 1)
+    local_pre_classifier = _linear_parameters(local_dim + context_dim, hidden_dim) + _linear_parameters(hidden_dim, 1)
     return BaselineHeadCapacity(
         local_base=local_base,
         shared_prefix=shared_prefix,
@@ -220,6 +223,8 @@ def head_baseline_parameter_counts(
         + shared_prefix
         + correction
         + gate,
+        local_pre_classifier=local_pre_classifier,
+        local_pre_independent_total=local_base + local_pre_classifier,
     )
 
 

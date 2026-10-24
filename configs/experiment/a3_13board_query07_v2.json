@@ -1,0 +1,87 @@
+{
+  "id": "a3-13board-query07-v2-20261022",
+  "status": "ACTIVE_ENGINEERING_INITIAL_VALUES_NOT_FORMAL_RELEASE",
+  "specimen_inventory": "I:/programming/实验资料/A3/refine-logs/plan_13specimens_20261022/specimens.json",
+  "split_draft": "I:/programming/实验资料/A3/refine-logs/plan_13specimens_20261022/split_draft.json",
+  "review_locations": "I:/programming/实验资料/A3/refine-logs/plan_13specimens_20261022/localization_review_todo.csv",
+  "sampling_rate_hz": 200000000,
+  "sampling_rate_status": "working acquisition assumption; defect-location compatibility check only",
+  "sound_speed_mps": {
+    "TC4": 6100,
+    "AL": 6320
+  },
+  "sound_speed_source": "https://ims.evidentscientific.com/ko/learn/ndt-tutorials/thickness-gauge/appendices-velocities",
+  "sound_speed_scope": "generic material longitudinal nominal values; 6100 is generic titanium proxy, not calibrated TC4",
+  "time_reference": "cropped_record_origin_is_zero",
+  "batch_reference_samples": 0,
+  "window_total_us": 0.7,
+  "prior": "Gaussian log bias with independent sigma and strength inside hard Local support",
+  "normalization_divisor": 131,
+  "normalization_scope": "fixed numeric scaling, not physical gain calibration",
+  "tail": {
+    "nominal_backwall_guard_us": 0.5,
+    "active_boundary_check_samples": 32,
+    "quiet_run_samples": 32,
+    "quiet_floor_raw_units": 3,
+    "quiet_guard_samples": 64,
+    "no_quiet": "retain_current_tail"
+  },
+  "training_labels": "complete reliable labels consistent with design; exclude all existing label-uncertainty flags and nine localized review regions; keep original data",
+  "time_qa": {
+    "only_designed_defect_records": true,
+    "per_interface": 24,
+    "seed": 23,
+    "search_halfwidth_us": 0.65,
+    "search_scope": "diagnostic peak candidate only; not automatic truth, calibration, filtering, or label reassignment"
+  },
+  "smoke": {
+    "fold": "F1",
+    "seed": 23,
+    "per_entity_positive": 8,
+    "per_entity_normal": 8,
+    "batch_size": 8,
+    "updates_per_head": 2,
+    "learning_rate": 0.001,
+    "backbone": "resnet1d",
+    "device": "cuda",
+    "scope": "F1 training entities only, software flow, no held-out performance or tuning"
+  },
+  "formal_training_permitted": false,
+  "readout": {
+    "sigma_us": 0.18,
+    "prior_strength": 0.5,
+    "attention_heads": 1,
+    "output_dim": 64,
+    "attention_type": "single-head additive content attention"
+  },
+  "model": {
+    "query_dim": 64,
+    "attention_dim": 64,
+    "token_dim": 64,
+    "common_feature_dim": 64
+  },
+  "ablation_candidates": [
+    {
+      "id": "A",
+      "sigma_us": 0.18,
+      "prior_strength": 0.0
+    },
+    {
+      "id": "B",
+      "sigma_us": 0.18,
+      "prior_strength": 0.5
+    },
+    {
+      "id": "C",
+      "sigma_us": 0.18,
+      "prior_strength": 1.0
+    },
+    {
+      "id": "D",
+      "sigma_us": 0.25,
+      "prior_strength": 0.5
+    }
+  ],
+  "ablation_scope": "Planned, not executed; identical hard support/backbone/split. No cross-fold tuning from held-out results.",
+  "supersedes": "a3_13board_quick_v1.json; 0.5 us explicitly retired by user"
+}

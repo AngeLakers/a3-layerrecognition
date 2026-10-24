@@ -170,7 +170,7 @@ def test_v1_2_model_schema_records_user_approved_boundaries() -> None:
             encoding="utf-8"
         )
     )
-    assert schema["architecture_version"] == "a3-v1.2"
+    assert schema["architecture_version"] == "a3-v1.3"
     assert schema["backbone"]["smoke_only"] == ["tcn"]
     assert schema["backbone"]["formal_training_candidates"] == [
         "resnet1d",
@@ -182,10 +182,12 @@ def test_v1_2_model_schema_records_user_approved_boundaries() -> None:
     assert schema["loss"]["equal_weight_for_each_supervised_sample"] is True
     assert schema["loss"]["local_auxiliary_loss"] == {
         "independent": "primary_local_base_only",
+        "local_pre_independent": "required",
         "vanilla_classifier_chain": "required",
         "propagation_conditioned": "required",
         "lambda_validation_candidates": [0.1, 0.3, 1.0],
         "lambda_shared_for_vanilla_and_proposed": True,
+        "zero_lambda": "explicit_disable_local_auxiliary_ablation_only",
     }
     assert schema["head_baselines"]["vanilla_classifier_chain"] == {
         "conditional_inputs": ["r_loc", "r_ctx", "prefix_hidden"],

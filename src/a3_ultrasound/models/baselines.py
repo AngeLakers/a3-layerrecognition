@@ -2,29 +2,27 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import torch
 from torch import Tensor, nn
 
-from a3_ultrasound.models.pcc import LocalBaseScorer, SharedPrefixGRUEncoder
+from a3_ultrasound.models.pcc import (
+    HeadStepOutput, LocalBaseScorer, LocalBaseType, SharedPrefixGRUEncoder,
+    validate_prefix_states,
+)
 
 
-@dataclass(frozen=True)
-class BaselineStepOutput:
-    logits: Tensor
-    base_logodds: Tensor
-    prefix_hidden: Tensor
+BaselineStepOutput = HeadStepOutput
 
 
 class IndependentConditionalStep(nn.Module):
     """Per-interface local prediction without prefix or context dependency."""
 
-    def __init__(self, local_dim: int, *, hidden_dim: int = 32) -> None:
+    def __init__(self, local_dim: int, *, hidden_dim: int = 32,
+                 local_base_type: LocalBaseType = "mlp") -> None:
         super().__init__()
         self.base = LocalBaseScorer(
             local_dim,
-            scorer_type="mlp",
+            scorer_type=local_base_type,
             hidden_dim=hidden_dim,
         )
 
@@ -37,13 +35,37 @@ class IndependentConditionalStep(nn.Module):
         prefix_states: Tensor,
         interface_mask: Tensor,
     ) -> BaselineStepOutput:
-        del r_ctx, r_gate, query, prefix_states
+        validate_prefix_states(prefix_states, interface_mask)
+        del r_ctx, r_gate, query
         base_logodds = self.base(r_loc) * interface_mask.to(dtype=r_loc.dtype)
-        prefix_hidden = r_loc.new_zeros((*interface_mask.shape, 1))
         return BaselineStepOutput(
             logits=base_logodds,
             base_logodds=base_logodds,
-            prefix_hidden=prefix_hidden,
+        )
+
+
+class LocalPreIndependentStep(nn.Module):
+    """Fuse Local and Pre observations without output-state dependencies."""
+
+    def __init__(self, *, local_dim: int, context_dim: int, hidden_dim: int = 64,
+                 local_base_hidden_dim: int = 32,
+                 local_base_type: LocalBaseType = "mlp") -> None:
+        super().__init__()
+        self.base = LocalBaseScorer(local_dim, scorer_type=local_base_type,
+                                    hidden_dim=local_base_hidden_dim)
+        self.classifier = nn.Sequential(
+            nn.Linear(local_dim + context_dim, hidden_dim), nn.GELU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, r_loc: Tensor, r_ctx: Tensor, r_gate: Tensor, query: Tensor,
+                prefix_states: Tensor, interface_mask: Tensor) -> HeadStepOutput:
+        validate_prefix_states(prefix_states, interface_mask)
+        del r_gate, query
+        valid = interface_mask.to(dtype=r_loc.dtype)
+        return HeadStepOutput(
+            logits=self.classifier(torch.cat((r_loc, r_ctx), dim=-1)).squeeze(-1) * valid,
+            base_logodds=self.base(r_loc) * valid,
         )
 
 
@@ -60,6 +82,7 @@ class VanillaClassifierChainStep(nn.Module):
         hidden_dim: int = 64,
         max_interfaces: int = 6,
         local_base_hidden_dim: int = 32,
+        local_base_type: LocalBaseType = "mlp",
     ) -> None:
         super().__init__()
         if not 1 <= max_interfaces <= 6:
@@ -72,7 +95,7 @@ class VanillaClassifierChainStep(nn.Module):
         )
         self.base = LocalBaseScorer(
             local_dim,
-            scorer_type="mlp",
+            scorer_type=local_base_type,
             hidden_dim=local_base_hidden_dim,
         )
         self.classifier = nn.Sequential(
@@ -109,5 +132,6 @@ class VanillaClassifierChainStep(nn.Module):
 __all__ = [
     "BaselineStepOutput",
     "IndependentConditionalStep",
+    "LocalPreIndependentStep",
     "VanillaClassifierChainStep",
 ]

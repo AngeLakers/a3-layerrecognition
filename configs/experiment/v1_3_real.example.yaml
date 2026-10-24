@@ -1,0 +1,23 @@
+schema_version: a3-run-v1.3
+model:
+  head_type: proposed
+  backbone: resnet1d
+  backbone_stage: final_pre_pool
+  rho: 1.0
+  readout_scope: indexed
+  pre_query_conditioned: false
+training:
+  seed: 23
+  epochs: 20
+  batch_size: 16
+  learning_rate: 0.001
+  weight_decay: 0.0
+  lambda_local: 0.3
+  disable_local_auxiliary: false
+  positive_class_weight: null
+  patience: 5
+  device: cpu
+  real_training_permitted: false  # example values are not a released real-data protocol
+data:
+  source: tensor_manifest
+  manifest: v1_3_tensor_manifest.example.yaml

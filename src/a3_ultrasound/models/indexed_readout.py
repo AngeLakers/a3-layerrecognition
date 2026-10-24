@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import torch
 from torch import Tensor, nn
@@ -78,6 +79,7 @@ def build_indexed_supports(
     interface_mask: Tensor,
     *,
     prior_center: Tensor | None = None,
+    prior_sigma_samples: float | None = None,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Build Local/Pre masks and a normalized Gaussian local prior.
 
@@ -117,7 +119,12 @@ def build_indexed_supports(
     local_mask = (centers >= starts) & (centers <= ends) & valid_feature & valid_interface
     pre_mask = (centers < starts) & valid_feature & valid_interface
 
-    scale = ((ends - starts).abs() / 2.0).clamp_min(1.0)
+    if prior_sigma_samples is not None:
+        if not math.isfinite(prior_sigma_samples) or prior_sigma_samples <= 0:
+            raise ValueError("prior_sigma_samples must be finite and positive.")
+        scale = prior_sigma_samples
+    else:
+        scale = ((ends - starts).abs() / 2.0).clamp_min(1.0)
     gaussian = torch.exp(-0.5 * ((centers - centers_of_prior) / scale).square())
     local_prior = gaussian * local_mask.to(dtype=gaussian.dtype)
     local_prior = local_prior / local_prior.sum(dim=-1, keepdim=True).clamp_min(torch.finfo(gaussian.dtype).eps)
@@ -163,8 +170,14 @@ class IndexedReadout(nn.Module):
         feature_dim: int,
         query_dim: int | None,
         attention_dim: int,
+        *,
+        owns_empty_context: bool | None = None,
+        prior_strength: float = 1.0,
     ) -> None:
         super().__init__()
+        if not math.isfinite(prior_strength) or prior_strength < 0:
+            raise ValueError("prior_strength must be finite and nonnegative.")
+        self.prior_strength = prior_strength
         self.feature_projection = nn.Linear(feature_dim, attention_dim, bias=False)
         self.query_projection = (
             nn.Linear(query_dim, attention_dim, bias=False)
@@ -173,7 +186,9 @@ class IndexedReadout(nn.Module):
         )
         self.score_projection = nn.Linear(attention_dim, 1, bias=False)
         self.score_bias = nn.Parameter(torch.zeros(attention_dim))
-        if query_dim is None:
+        if owns_empty_context is None:
+            owns_empty_context = query_dim is None
+        if owns_empty_context:
             self.empty_context = nn.Parameter(torch.zeros(feature_dim))
         else:
             self.register_parameter("empty_context", None)
@@ -216,10 +231,12 @@ class IndexedReadout(nn.Module):
             assert query is not None
             hidden = hidden + self.query_projection(query).unsqueeze(2)
         scores = self.score_projection(torch.tanh(hidden)).squeeze(-1)
-        if local_prior is not None:
+        if local_prior is not None and self.prior_strength != 0:
             eps = torch.finfo(scores.dtype).eps
-            scores = scores + torch.log(local_prior.clamp_min(eps))
+            scores = scores + self.prior_strength * torch.log(local_prior.clamp_min(eps))
         masked_scores = scores.masked_fill(~valid, float("-inf"))
+        # All-masked rows must be finite BEFORE softmax to avoid NaN gradients.
+        masked_scores = torch.where(has_support.unsqueeze(-1), masked_scores, 0.0)
         attention = torch.softmax(masked_scores, dim=-1)
         attention = torch.where(has_support.unsqueeze(-1), attention, torch.zeros_like(attention))
         token = torch.einsum("bkl,bld->bkd", attention, features)
@@ -228,7 +245,7 @@ class IndexedReadout(nn.Module):
         if allow_empty_context:
             if self.empty_context is None:
                 raise ValueError(
-                    "Only the query-free Pre-interface branch owns empty_context."
+                    "This Readout does not own an empty_context parameter."
                 )
             token = torch.where(empty_context.unsqueeze(-1), self.empty_context.view(1, 1, -1), token)
         token = token * interface_mask.unsqueeze(-1).to(dtype=token.dtype)

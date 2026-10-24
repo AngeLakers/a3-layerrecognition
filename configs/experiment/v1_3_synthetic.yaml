@@ -1,0 +1,23 @@
+schema_version: a3-run-v1.3
+model:
+  head_type: proposed
+  backbone: tcn  # synthetic smoke only
+  backbone_stage: final_pre_pool
+  rho: 1.0
+  readout_scope: indexed
+  pre_query_conditioned: false
+training:
+  seed: 23
+  epochs: 2
+  batch_size: 4
+  learning_rate: 0.001
+  weight_decay: 0.0
+  lambda_local: 0.3
+  disable_local_auxiliary: false
+  positive_class_weight: null
+  patience: 2
+  device: cpu
+  real_training_permitted: false
+data:
+  source: synthetic
+  samples_per_split: 8

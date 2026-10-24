@@ -34,6 +34,9 @@ class ExactInferenceOutput:
     probabilities: Tensor
     marginals: Tensor
     map_states: Tensor
+    raw_log_normalizer: Tensor
+    raw_log_probabilities: Tensor
+    conditional_probability_range: Tensor
 
 
 def lexicographic_binary_paths(interface_count: int, *, device: torch.device) -> Tensor:
@@ -85,41 +88,54 @@ def enumerate_binary_chain(
     probabilities = torch.zeros((batch_size, max_paths), device=device, dtype=r_loc.dtype)
     marginals = torch.zeros((batch_size, kmax), device=device, dtype=r_loc.dtype)
     map_states = torch.full((batch_size, kmax), -1, device=device, dtype=torch.long)
+    raw_log_probabilities = torch.full_like(log_probabilities, float("-inf"))
+    raw_log_normalizer = r_loc.new_zeros(batch_size)
+    conditional_probability_range = r_loc.new_zeros((batch_size, kmax))
 
-    for batch_index in range(batch_size):
-        valid_indices = torch.nonzero(interface_mask[batch_index], as_tuple=False).squeeze(1)
-        interface_count = int(valid_indices.numel())
+    # Equal-K samples share the same path lattice. Fold sample and path axes
+    # into the Head's batch axis; no reduction ever crosses sample boundaries.
+    for interface_count in sorted(set(counts.cpu().tolist())):
+        batch_indices = torch.nonzero(counts == interface_count, as_tuple=False).squeeze(1)
+        group_size = batch_indices.numel()
         paths = lexicographic_binary_paths(interface_count, device=device)
         path_count = paths.shape[0]
-        repeated = lambda tensor: tensor[batch_index : batch_index + 1, valid_indices].expand(path_count, -1, -1)
-        compact_mask = torch.ones((path_count, interface_count), device=device, dtype=torch.bool)
+        def repeated(tensor):
+            selected = tensor.index_select(0, batch_indices)[:, :interface_count]
+            return selected[:, None].expand(-1, path_count, -1, -1).reshape(
+                group_size * path_count, interface_count, selected.shape[-1])
+        grouped_paths = paths[None].expand(group_size, -1, -1)
+        compact_mask = torch.ones((group_size * path_count, interface_count), device=device, dtype=torch.bool)
         output = step(
             repeated(r_loc),
             repeated(r_ctx),
             repeated(r_gate),
             repeated(query),
-            paths,
+            grouped_paths.reshape(-1, interface_count),
             compact_mask,
         )
-        path_values = paths.to(dtype=output.logits.dtype)
+        logits = output.logits.reshape(group_size, path_count, interface_count)
+        path_values = grouped_paths.to(dtype=logits.dtype)
         unnormalized_log_probability = (
-            path_values * F.logsigmoid(output.logits)
-            + (1.0 - path_values) * F.logsigmoid(-output.logits)
-        ).sum(dim=1)
-        log_probability = (
-            unnormalized_log_probability
-            - torch.logsumexp(unnormalized_log_probability, dim=0)
-        )
+            path_values * F.logsigmoid(logits)
+            + (1.0 - path_values) * F.logsigmoid(-logits)
+        ).sum(dim=2)
+        log_z = torch.logsumexp(unnormalized_log_probability, dim=1)
+        log_probability = unnormalized_log_probability - log_z[:, None]
         probability = log_probability.exp()
-        compact_marginal = (probability.unsqueeze(1) * path_values).sum(dim=0)
-        best_path = paths[log_probability.argmax(dim=0)]
+        compact_marginal = (probability.unsqueeze(2) * path_values).sum(dim=1)
+        best_path = paths[log_probability.argmax(dim=1)]
 
-        states[batch_index, :path_count, valid_indices] = paths
-        path_mask[batch_index, :path_count] = True
-        log_probabilities[batch_index, :path_count] = log_probability
-        probabilities[batch_index, :path_count] = probability
-        marginals[batch_index, valid_indices] = compact_marginal
-        map_states[batch_index, valid_indices] = best_path
+        states[batch_indices, :path_count, :interface_count] = grouped_paths
+        path_mask[batch_indices, :path_count] = True
+        log_probabilities[batch_indices, :path_count] = log_probability
+        probabilities[batch_indices, :path_count] = probability
+        marginals[batch_indices, :interface_count] = compact_marginal
+        map_states[batch_indices, :interface_count] = best_path
+        raw_log_normalizer[batch_indices] = log_z
+        raw_log_probabilities[batch_indices, :path_count] = unnormalized_log_probability
+        conditional_p = logits.sigmoid()
+        conditional_probability_range[batch_indices, :interface_count] = (
+            conditional_p.amax(dim=1) - conditional_p.amin(dim=1))
 
     return ExactInferenceOutput(
         path_states=states,
@@ -128,6 +144,9 @@ def enumerate_binary_chain(
         probabilities=probabilities,
         marginals=marginals,
         map_states=map_states,
+        raw_log_normalizer=raw_log_normalizer,
+        raw_log_probabilities=raw_log_probabilities,
+        conditional_probability_range=conditional_probability_range,
     )
 
 

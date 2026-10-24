@@ -1,5 +1,11 @@
-schema_version: 4
-architecture_version: a3-v1.2
+schema_version: 5
+architecture_version: a3-v1.3
+
+assembly:
+  head_type: [local_independent, local_pre_independent, vanilla_chain, proposed]
+  interfaces: [encode, conditional, infer_exact]
+  encoded_contains_labels: false
+  model_weights_shared_across_comparisons: false
 
 backbone:
   formal_training_candidates: [resnet1d, inceptiontime, fcn1d]
@@ -37,6 +43,11 @@ indexed_readout:
   local_empty_support: fail_fast
   pre_interface_branch: feature_only_masked_attention
   empty_pre_support: learnable_empty_context
+  readout_scope: indexed
+  pre_query_conditioned: false
+  ablations:
+    full_waveform: local_independent_only_without_gaussian_prior
+    query_conditioned_pre: explicit_nondefault
 
 interface_query:
   metadata_schema: a3-interface-meta-v3
@@ -76,20 +87,26 @@ exact_enumerator:
   engineering_K_cap: 6
   complexity: O(2^K)
   normalization: explicit_logsumexp
+  raw_log_normalizer: recorded_before_normalization
+  conditional_probability_range: recorded_across_all_paths
 
 loss:
   normalization: per_supervised_sample_supervised_interface_count
   equal_weight_for_each_supervised_sample: true
   label_mask_controls_terms: true
+  main_training_requires_all_valid_labels: true
+  unknown_prefix_marginalization: not_implemented
   local_auxiliary_loss:
     independent: primary_local_base_only
+    local_pre_independent: required
     vanilla_classifier_chain: required
     propagation_conditioned: required
     lambda_validation_candidates: [0.1, 0.3, 1.0]
     lambda_shared_for_vanilla_and_proposed: true
+    zero_lambda: explicit_disable_local_auxiliary_ablation_only
 
 head_baselines:
-  required: [independent, vanilla_classifier_chain, propagation_conditioned]
+  required: [local_independent, local_pre_independent, vanilla_chain, proposed]
   optional_small_K: [flat_joint]
   legacy_matched_joint_spec: matched_joint_spec.yaml
   local_base:
@@ -99,6 +116,10 @@ head_baselines:
     conditional_inputs: [r_loc, r_ctx, prefix_hidden]
     direct_query_to_classifier: forbidden
     gate_token_input: forbidden
+  local_pre_independent:
+    conditional_inputs: [r_loc, r_ctx]
+    prefix_gru: absent
+    gate: absent
 
 shortcut_baselines:
   query_only: required

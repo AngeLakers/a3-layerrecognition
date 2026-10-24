@@ -1,13 +1,13 @@
-# A3 V1.2 代码审阅指南
+# A3 V1.3 代码审阅指南
 
-本仓库提供 V1.2 当前实现与完整网络规范，便于逐文件审阅。源代码保留此次整理前的计算逻辑；发布整理补充文档与版本记录，并修正 fresh-process 测试的工作目录，使其可以直接从 checkout 导入包，不修改网络设计或研究裁决。
+更新：2026-10-08。四Head已共用训练与exact评估；软件证据见[V1.3验证记录](VALIDATION_V1_3.md)，当前规范见[V1.3架构](ARCHITECTURE_V1_3.md)。本次仅清理旧状态，未重跑测试或放行真实训练。
 
 ## 建议阅读顺序
 
-1. 阅读 [完整架构](ARCHITECTURE_V1_2.md)，特别是第 4–9 节的输入隔离、条件概率、三种 Head 和 loss，以及第 11 节的实现边界。
+1. 阅读 [完整架构](ARCHITECTURE_V1_3.md)，重点核对第4–10节的信息隔离、四Head、完整标签主训练与概率一致性，以及第11–15节的运行和未完成项。
 2. 从 [`A3PCCModel`](../src/a3_ultrasound/models/integrated.py) 跟踪 forward 和 infer_exact。
 3. 对照下表检查局部实现与对应测试。
-4. 阅读 [本次验证记录](VALIDATION.md)，运行所需测试；反馈请注明 commit、文件、函数、复现条件及预期/实际行为。
+4. 阅读 [2026-10-01验证记录](VALIDATION_V1_3.md)，运行所需测试；反馈请注明 commit、文件、函数、复现条件及预期/实际行为。
 
 ## 源码和测试地图
 
@@ -18,10 +18,11 @@
 | Query / Prior / indexed Local 与 Pre Readout | [query.py](../src/a3_ultrasound/models/query.py)、[indexed_readout.py](../src/a3_ultrasound/models/indexed_readout.py) | [test_schema_and_readout.py](../tests/test_schema_and_readout.py) |
 | 三职责 token | [responsibility_tokens.py](../src/a3_ultrasound/models/responsibility_tokens.py) | [test_responsibility_tokens.py](../tests/test_responsibility_tokens.py) |
 | Shared GRU / Local Base / Gate / Correction | [pcc.py](../src/a3_ultrasound/models/pcc.py) | [test_pcc_enumerator.py](../tests/test_pcc_enumerator.py) |
-| Independent / Vanilla Head | [baselines.py](../src/a3_ultrasound/models/baselines.py) | [test_v1_2_architecture.py](../tests/test_v1_2_architecture.py) |
-| Proposed 集成 / exact enumeration | [integrated.py](../src/a3_ultrasound/models/integrated.py)、[enumerator.py](../src/a3_ultrasound/inference/enumerator.py) | [test_integrated_model.py](../tests/test_integrated_model.py) |
+| Local / Local＋Pre / Vanilla Head | [baselines.py](../src/a3_ultrasound/models/baselines.py) | [test_v1_2_architecture.py](../tests/test_v1_2_architecture.py) |
+| 四Head集成 / exact enumeration | [integrated.py](../src/a3_ultrasound/models/integrated.py)、[enumerator.py](../src/a3_ultrasound/inference/enumerator.py) | [test_integrated_model.py](../tests/test_integrated_model.py) |
 | 等样本监督权重 / local auxiliary loss | [losses.py](../src/a3_ultrasound/models/losses.py) | [test_losses.py](../tests/test_losses.py) |
-| V1.2 配置 / 容量透明度 | [schema.yaml](../configs/model/schema.yaml)、[capacity.py](../src/a3_ultrasound/models/capacity.py) | [test_v1_2_architecture.py](../tests/test_v1_2_architecture.py) |
+| 模型配置 / 容量透明度 | [schema.yaml](../configs/model/schema.yaml)、[capacity.py](../src/a3_ultrasound/models/capacity.py) | [test_v1_2_architecture.py](../tests/test_v1_2_architecture.py) |
+| 公共训练、完整标签、split、checkpoint、exact评估 | [training.py](../src/a3_ultrasound/training.py)、[run_a3.py](../scripts/run_a3.py) | [test_v1_3_training.py](../tests/test_v1_3_training.py) |
 
 ## 网络数据流
 
@@ -31,12 +32,12 @@ raw RF + length_mask
   -> channel-only Adapter (D_h=64, 保留时间坐标和 mask)
   -> indexed Local / Pre Readout <- metadata 的 Query/Prior 分流
   -> role-specific r_loc / r_ctx / r_gate
-  -> 三种可替换 Head：Independent | Vanilla Chain | Proposed
+  -> 四种可替换 Head：Local | Local＋Pre | Vanilla Chain | Proposed
   -> 同一 conditional-step / exact-enumeration 协议
   -> joint posterior、MAP、逐界面 marginal
 ```
 
-三种 Head 是并行比较方案。当前 `A3PCCModel` 直接装配 Proposed；另外两种 Head 的协议和枚举可单独测试，但其完整端到端训练 wrapper 尚未提供。
+四种Head是并行比较方案，通过`head_type`选择并共用编码/条件推断/exact接口；`A3PCCModel`默认Proposed，公共工厂支持四种Head。主训练使用真实完整前缀，部署评估使用候选路径枚举，预测不读取标签。
 
 Proposed 的条件 logit 为 `base(r_loc) + sigmoid(gate(r_gate)) * rho * tanh(correction(r_ctx, h_prefix))`。共享 GRU 只编码当前界面之前的 Query/state；Gate 不读 prefix；第一个界面的 Correction 为零。完整公式、默认维度及参数量见架构文档。
 
@@ -51,7 +52,7 @@ python -m pytest -q
 聚焦架构检查可运行：
 
 ```powershell
-python -m pytest -q tests/test_v1_2_architecture.py tests/test_backbone.py tests/test_integrated_model.py tests/test_pcc_enumerator.py tests/test_losses.py tests/test_responsibility_tokens.py tests/test_schema_and_readout.py
+python -m pytest -q tests/test_v1_3_training.py tests/test_v1_2_architecture.py tests/test_backbone.py tests/test_integrated_model.py tests/test_pcc_enumerator.py tests/test_losses.py tests/test_responsibility_tokens.py tests/test_schema_and_readout.py
 ```
 
 环境参考 [`requirements.txt`](../requirements.txt)、[`environment.yml`](../environment.yml) 和 [`pyproject.toml`](../pyproject.toml)。前两者是原登记的 Windows/CUDA 环境清单，未在此次整理中升级或重新验证远端依赖下载；在另一台机器全新安装仍需验证。PyCharm 使用同一解释器，以仓库根目录为 working directory，配置 pytest target 为 `tests`。命令行测试通过不等于已验证 PyCharm GUI。
@@ -65,9 +66,9 @@ python -m pytest -q tests/test_v1_2_architecture.py tests/test_backbone.py tests
 - 检查 padding、有效长度、feature-center 几何和空 Local support 行为。
 - 检查 Query/Prior 输入隔离、三职责投影、prefix 是否泄漏当前/未来状态、Gate 是否独立于候选路径。
 - 检查 K=1…6 的参数共享、概率归一、mixed-K mask 和 teacher-prefix/exact 一致性。
-- 检查三种 Head 的公平输入和 Local Base 辅助监督，以及可靠标签数归一。
-- 当前缺少 Independent/Vanilla 完整训练装配；正式监督训练、数据实体 split、outer evaluation 未闭合。
-- V1.2 M1 和受影响的真实 RF/正式 Backbone 门禁仍待专门重验证；旧 scripts/验收合同及 matched-joint 配置保留作历史参考，不能套用旧 PASS 证明当前版本。
+- 检查四Head的公平输入、完整标签共同cohort、Local Base辅助分派和每样本等权；Local独立Head不重复加Base损失。
+- 四Head训练装配已有实现；跨采集manifest的真实数据准备、正式监督split与outer evaluation尚未闭合。
+- V1.3完整M1与受影响真实RF门禁仍待专门重验证；2026-10-01正式Backbone×四Head合成smoke仅是已记录的软件检查；旧 scripts/验收合同及 matched-joint 配置保留作历史参考，不能套用旧 PASS 证明当前版本。
 - K=4–6 仅是工程支持范围；noncausal Backbone 下的 Pre support 不构成原始波形严格因果裁剪。
 
 ## 内容边界

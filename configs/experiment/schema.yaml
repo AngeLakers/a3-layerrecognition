@@ -1,4 +1,9 @@
-schema_version: 1
+schema_version: 2
+architecture_version: a3-v1.3
+executable_example: v1_3_synthetic.yaml
+entrypoint: scripts/run_a3.py
+main_training_label_policy: complete_reliable_valid_interfaces
+evaluation_predictions: exact_without_truth_prefix
 data_config: ../data/schema.yaml
 model_config: ../model/schema.yaml
 seed: null

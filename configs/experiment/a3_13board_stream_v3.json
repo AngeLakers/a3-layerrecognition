@@ -1,0 +1,192 @@
+{
+  "schema_version": "a3-stream-run-v1",
+  "catalog": "I:\\programming\\实验资料\\A3\\experiments\\local_preflight_v3_20261022\\catalog\\catalog.json",
+  "folds": [
+    {
+      "fold": "F1",
+      "train": [
+        "TCL3-2",
+        "TCL3-3",
+        "TCL3-5",
+        "TCL3-6",
+        "TCL4-3",
+        "TCL4-4",
+        "薄"
+      ],
+      "validation": [
+        "TCL3-4",
+        "TCL4-2",
+        "厚2"
+      ],
+      "test": [
+        "TCL3-1",
+        "TCL4-1",
+        "厚1"
+      ]
+    },
+    {
+      "fold": "F2",
+      "train": [
+        "TCL3-1",
+        "TCL3-3",
+        "TCL3-4",
+        "TCL3-6",
+        "TCL4-1",
+        "TCL4-4",
+        "厚1"
+      ],
+      "validation": [
+        "TCL3-5",
+        "TCL4-3",
+        "薄"
+      ],
+      "test": [
+        "TCL3-2",
+        "TCL4-2",
+        "厚2"
+      ]
+    },
+    {
+      "fold": "F3",
+      "train": [
+        "TCL3-1",
+        "TCL3-2",
+        "TCL3-4",
+        "TCL3-5",
+        "TCL4-1",
+        "TCL4-2",
+        "厚2"
+      ],
+      "validation": [
+        "TCL3-6",
+        "TCL4-4",
+        "厚1"
+      ],
+      "test": [
+        "TCL3-3",
+        "TCL4-3",
+        "薄"
+      ]
+    },
+    {
+      "fold": "F4",
+      "train": [
+        "TCL3-2",
+        "TCL3-3",
+        "TCL3-5",
+        "TCL3-6",
+        "TCL4-2",
+        "TCL4-3",
+        "厚1",
+        "薄"
+      ],
+      "validation": [
+        "TCL3-1",
+        "TCL4-1",
+        "厚2"
+      ],
+      "test": [
+        "TCL3-4",
+        "TCL4-4"
+      ]
+    },
+    {
+      "fold": "F5",
+      "train": [
+        "TCL3-1",
+        "TCL3-3",
+        "TCL3-4",
+        "TCL4-1",
+        "TCL4-3",
+        "TCL4-4",
+        "厚1",
+        "厚2"
+      ],
+      "validation": [
+        "TCL3-2",
+        "TCL4-2",
+        "薄"
+      ],
+      "test": [
+        "TCL3-5",
+        "TCL3-6"
+      ]
+    }
+  ],
+  "seeds": [
+    23,
+    41,
+    59,
+    83,
+    101
+  ],
+  "heads": [
+    "local_independent",
+    "local_pre_independent",
+    "vanilla_chain",
+    "proposed"
+  ],
+  "model": {
+    "backbone": "resnet1d",
+    "backbone_stage": "final_pre_pool",
+    "query_dim": 64,
+    "attention_dim": 64,
+    "token_dim": 64,
+    "prefix_dim": 32,
+    "pcc_hidden_dim": 64,
+    "common_feature_dim": 64,
+    "max_interfaces": 6,
+    "rho": 1.0,
+    "local_base_type": "mlp",
+    "local_base_hidden_dim": 32,
+    "readout_scope": "indexed",
+    "pre_query_conditioned": false,
+    "local_prior_sigma_samples": 36.0,
+    "local_prior_strength": 0.5
+  },
+  "training": {
+    "seed": 23,
+    "epochs": 40,
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0,
+    "lambda_local": 0.3,
+    "positive_class_weight": null,
+    "disable_local_auxiliary": false,
+    "patience": 8,
+    "scheduler_step_size": null,
+    "scheduler_gamma": 0.5,
+    "device": "cuda",
+    "real_training_permitted": false
+  },
+  "normal_to_positive": 3,
+  "formal_training_permitted": false,
+  "outer_evaluation_permitted": false,
+  "diagnostic": {
+    "folds": [
+      "F4",
+      "F5"
+    ],
+    "per_entity_per_class": 4,
+    "training": {
+      "epochs": 8,
+      "patience": 8,
+      "batch_size": 8
+    },
+    "scope": "train-only in-sample diagnostic; no tuning on results; no reusable pretraining"
+  },
+  "readiness_scope": "Local preparation; SSH/3080Ti checks and formal launch await user permission",
+  "frozen_selection_root": "I:\\programming\\实验资料\\A3\\experiments\\local_preflight_v3_20261022\\frozen_training_selections",
+  "statistics": {
+    "bootstrap_replicates": 10000,
+    "bootstrap_seed": 20261022,
+    "paired_positive_seeds_required": 4,
+    "primary_pair": [
+      "proposed",
+      "vanilla_chain"
+    ],
+    "calibration_guard_max_mean_delta_joint_nll": 0.0,
+    "calibration_guard_max_mean_delta_deepest_brier": 0.0,
+    "calibration_scope": "conservative no-degradation guards; aggregate metrics, not paired significance proof"
+  }
+}

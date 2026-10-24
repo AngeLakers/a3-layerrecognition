@@ -9,6 +9,9 @@ import torch
 from torch import Tensor
 from torch.nn import functional as F
 
+from a3_ultrasound.models.pcc import HeadStepOutput, validate_prefix_states
+from a3_ultrasound.schema import InterfaceBatch
+
 
 @dataclass(frozen=True)
 class PCCLossOutput:
@@ -86,15 +89,19 @@ def pcc_training_loss(
         if pos_weight.numel() != 1 or not torch.isfinite(pos_weight).all() or pos_weight.item() <= 0:
             raise ValueError("positive_class_weight must be one finite positive scalar.")
 
-    target = y.to(dtype=conditional_logits.dtype)
+    # Keep the low-level masked reducer available for legacy diagnostics. It
+    # does not authorize teacher forcing with unknown states; use the wrapper below.
+    target = torch.where(supervision_mask, y, 0).to(dtype=conditional_logits.dtype)
+    safe_logits = torch.where(supervision_mask, conditional_logits, 0.0)
+    safe_base = torch.where(supervision_mask, base_logodds, 0.0)
     chain_terms = F.binary_cross_entropy_with_logits(
-        conditional_logits,
+        safe_logits,
         target,
         reduction="none",
         pos_weight=pos_weight,
     )
     local_terms = F.binary_cross_entropy_with_logits(
-        base_logodds,
+        safe_base,
         target,
         reduction="none",
         pos_weight=pos_weight,
@@ -118,4 +125,32 @@ def pcc_training_loss(
     )
 
 
-__all__ = ["PCCLossOutput", "pcc_training_loss"]
+def validate_complete_training_batch(batch: InterfaceBatch) -> None:
+    """The common four-Head main-training cohort requires all valid labels."""
+    if batch.y is None:
+        raise ValueError("Main training requires complete reliable labels (y).")
+    if batch.label_mask is not None and not torch.equal(batch.label_mask, batch.interface_mask):
+        raise ValueError("Main training requires complete label_mask coverage of all valid interfaces.")
+    validate_prefix_states(batch.y, batch.interface_mask)
+
+
+def head_training_loss(output: HeadStepOutput, batch: InterfaceBatch, *, head_type: str,
+                       lambda_local: float = 0.3,
+                       positive_class_weight: float | Tensor | None = None,
+                       disable_local_auxiliary: bool = False) -> PCCLossOutput:
+    """Dispatch the main loss; lambda=0 is an explicitly named ablation only."""
+    validate_complete_training_batch(batch)
+    if head_type not in ("local_independent", "local_pre_independent", "vanilla_chain", "proposed"):
+        raise ValueError("Unknown head_type for training loss.")
+    if disable_local_auxiliary:
+        if lambda_local != 0 or head_type == "local_independent":
+            raise ValueError("The no-local-auxiliary ablation requires lambda_local=0 and an auxiliary Head.")
+    elif lambda_local not in (0.1, 0.3, 1.0):
+        raise ValueError("Main lambda_local candidates are 0.1, 0.3, 1.0; zero requires explicit ablation.")
+    effective_lambda = 0.0 if head_type == "local_independent" else lambda_local
+    return pcc_training_loss(output.logits, output.base_logodds, batch.y, batch.interface_mask,
+                             label_mask=batch.label_mask, positive_class_weight=positive_class_weight,
+                             lambda_local=effective_lambda)
+
+
+__all__ = ["PCCLossOutput", "pcc_training_loss", "head_training_loss", "validate_complete_training_batch"]

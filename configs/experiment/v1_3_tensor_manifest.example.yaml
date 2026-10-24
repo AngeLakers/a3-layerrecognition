@@ -1,0 +1,8 @@
+schema_version: a3-tensor-dataset-v1
+data_kind: real
+preprocessing_id: <APPROVED_PREPROCESSING_VERSION>
+split_id: <APPROVED_SPECIMEN_SPLIT_VERSION>
+splits:
+  train: train.npz
+  validation: validation.npz
+  test: test.npz

@@ -1,8 +1,9 @@
-"""Integrated synthetic-forward contract for the A3 PCC model."""
+"""Shared frontend and replaceable conditional heads for A3 V1.3."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import torch
 from torch import Tensor, nn
@@ -12,6 +13,9 @@ from a3_ultrasound.models.backbone import (
     BackboneOutput,
     CommonTemporalBackboneAdapter,
 )
+from a3_ultrasound.models.baselines import (
+    IndependentConditionalStep, LocalPreIndependentStep, VanillaClassifierChainStep,
+)
 from a3_ultrasound.models.indexed_readout import (
     IndexedReadout,
     LocalTokenDiagnostics,
@@ -19,7 +23,9 @@ from a3_ultrasound.models.indexed_readout import (
     build_indexed_supports,
     summarize_local_tokens,
 )
-from a3_ultrasound.models.pcc import LocalBaseType, PCCConditionalStep, PCCStepOutput
+from a3_ultrasound.models.pcc import (
+    HeadStepOutput, LocalBaseType, PCCConditionalStep, validate_prefix_states,
+)
 from a3_ultrasound.models.query import InterfaceQueryEncoder
 from a3_ultrasound.models.responsibility_tokens import (
     ResponsibilityTokenProjector,
@@ -28,10 +34,15 @@ from a3_ultrasound.models.responsibility_tokens import (
 from a3_ultrasound.schema import InterfaceBatch
 
 
-@dataclass(frozen=True)
-class IntegratedPCCOutput:
-    """Conditional forward outputs plus the tensors needed for structure audits."""
+HeadType = Literal["local_independent", "local_pre_independent", "vanilla_chain", "proposed"]
+HEAD_TYPES = ("local_independent", "local_pre_independent", "vanilla_chain", "proposed")
 
+
+@dataclass(frozen=True)
+class EncodedInterfaces:
+    """Label-free features and support diagnostics reusable across candidate paths."""
+
+    interface_mask: Tensor
     backbone: BackboneOutput
     query: Tensor
     window_start: Tensor
@@ -43,7 +54,11 @@ class IntegratedPCCOutput:
     local_readout: ReadoutOutput
     pre_readout: ReadoutOutput
     responsibility_tokens: ResponsibilityTokens
-    conditional: PCCStepOutput
+
+
+@dataclass(frozen=True)
+class IntegratedPCCOutput(EncodedInterfaces):
+    conditional: HeadStepOutput
 
 
 class A3PCCModel(nn.Module):
@@ -68,6 +83,11 @@ class A3PCCModel(nn.Module):
         rho: float = 1.0,
         local_base_type: LocalBaseType = "mlp",
         local_base_hidden_dim: int = 32,
+        head_type: HeadType = "proposed",
+        readout_scope: Literal["indexed", "full_waveform"] = "indexed",
+        pre_query_conditioned: bool = False,
+        local_prior_sigma_samples: float | None = None,
+        local_prior_strength: float = 1.0,
     ) -> None:
         super().__init__()
         if any(
@@ -88,6 +108,18 @@ class A3PCCModel(nn.Module):
         if not isinstance(feature_dim, int) or isinstance(feature_dim, bool) or feature_dim <= 0:
             raise ValueError("backbone must expose one positive integer output_dim.")
         self.max_interfaces = max_interfaces
+        if not 1 <= max_interfaces <= 6:
+            raise ValueError("max_interfaces must lie in [1, 6].")
+        if head_type not in HEAD_TYPES:
+            raise ValueError(f"Unknown head_type: {head_type!r}.")
+        if readout_scope not in ("indexed", "full_waveform"):
+            raise ValueError("readout_scope must be indexed or full_waveform.")
+        if readout_scope == "full_waveform" and head_type != "local_independent":
+            raise ValueError("full_waveform ablation is restricted to local_independent.")
+        self.head_type = head_type
+        self.readout_scope = readout_scope
+        self.pre_query_conditioned = pre_query_conditioned
+        self.local_prior_sigma_samples = local_prior_sigma_samples
         self.backbone = backbone
         self.backbone_adapter = CommonTemporalBackboneAdapter(
             feature_dim,
@@ -98,11 +130,13 @@ class A3PCCModel(nn.Module):
             feature_dim=common_feature_dim,
             query_dim=query_dim,
             attention_dim=attention_dim,
+            prior_strength=local_prior_strength,
         )
         self.pre_readout = IndexedReadout(
             feature_dim=common_feature_dim,
-            query_dim=None,
+            query_dim=query_dim if pre_query_conditioned else None,
             attention_dim=attention_dim,
+            owns_empty_context=True,
         )
         self.responsibility_projector = ResponsibilityTokenProjector(
             local_dim=common_feature_dim,
@@ -110,18 +144,32 @@ class A3PCCModel(nn.Module):
             query_dim=query_dim,
             token_dim=token_dim,
         )
-        self.pcc = PCCConditionalStep(
-            local_dim=token_dim,
-            context_dim=token_dim,
-            gate_dim=token_dim,
-            query_dim=query_dim,
-            prefix_dim=prefix_dim,
-            hidden_dim=pcc_hidden_dim,
-            max_interfaces=max_interfaces,
-            rho=rho,
-            local_base_type=local_base_type,
-            local_base_hidden_dim=local_base_hidden_dim,
-        )
+        common = dict(local_dim=token_dim, local_base_type=local_base_type,
+                      local_base_hidden_dim=local_base_hidden_dim)
+        # Retain the 'pcc' module key for compatibility with historical state_dicts.
+        if head_type == "local_independent":
+            self.pcc = IndependentConditionalStep(
+                token_dim, hidden_dim=local_base_hidden_dim, local_base_type=local_base_type)
+        elif head_type == "local_pre_independent":
+            self.pcc = LocalPreIndependentStep(
+                **common, context_dim=token_dim, hidden_dim=pcc_hidden_dim)
+        elif head_type == "vanilla_chain":
+            self.pcc = VanillaClassifierChainStep(
+                **common, context_dim=token_dim, query_dim=query_dim,
+                prefix_dim=prefix_dim, hidden_dim=pcc_hidden_dim, max_interfaces=max_interfaces)
+        else:
+            self.pcc = PCCConditionalStep(
+                local_dim=token_dim,
+                context_dim=token_dim,
+                gate_dim=token_dim,
+                query_dim=query_dim,
+                prefix_dim=prefix_dim,
+                hidden_dim=pcc_hidden_dim,
+                max_interfaces=max_interfaces,
+                rho=rho,
+                local_base_type=local_base_type,
+                local_base_hidden_dim=local_base_hidden_dim,
+            )
 
     def forward(
         self,
@@ -130,7 +178,16 @@ class A3PCCModel(nn.Module):
     ) -> IntegratedPCCOutput:
         """Run one truth-prefix or explicitly supplied conditional path."""
 
-        self._validate_structural_inputs(batch, prefix_states)
+        encoded = self.encode(batch)
+        return IntegratedPCCOutput(**vars(encoded), conditional=self.conditional(encoded, prefix_states))
+
+    @property
+    def head(self) -> nn.Module:
+        return self.pcc
+
+    def encode(self, batch: InterfaceBatch) -> EncodedInterfaces:
+        """Encode only waveform, structure and validity masks, never labels."""
+        self._validate_structural_inputs(batch)
         raw_backbone_output = self.backbone(batch.x_raw, batch.length_mask)
         backbone_output = self.backbone_adapter(raw_backbone_output)
         query = self.query_encoder(batch.interface_meta, batch.interface_mask)
@@ -142,21 +199,27 @@ class A3PCCModel(nn.Module):
             backbone_output.feature_mask,
             batch.interface_mask,
             prior_center=nominal_tof,
+            prior_sigma_samples=self.local_prior_sigma_samples,
         )
         local_token_diagnostics = summarize_local_tokens(
             local_support,
             batch.interface_mask,
         )
+        if self.readout_scope == "full_waveform":
+            local_support = (backbone_output.feature_mask.unsqueeze(1)
+                             & batch.interface_mask.unsqueeze(-1))
+            local_prior = local_support.to(backbone_output.features.dtype)
+            local_prior = local_prior / local_prior.sum(-1, keepdim=True).clamp_min(1)
         local_output = self.local_readout(
             backbone_output.features,
             query,
             local_support,
             batch.interface_mask,
-            local_prior=local_prior,
+            local_prior=local_prior if self.readout_scope == "indexed" else None,
         )
         pre_output = self.pre_readout(
             backbone_output.features,
-            None,
+            query if self.pre_query_conditioned else None,
             pre_support,
             batch.interface_mask,
             allow_empty_context=True,
@@ -167,15 +230,8 @@ class A3PCCModel(nn.Module):
             query,
             batch.interface_mask,
         )
-        conditional = self.pcc(
-            tokens.r_loc,
-            tokens.r_ctx,
-            tokens.r_gate,
-            query,
-            prefix_states,
-            batch.interface_mask,
-        )
-        return IntegratedPCCOutput(
+        return EncodedInterfaces(
+            interface_mask=batch.interface_mask,
             backbone=backbone_output,
             query=query,
             window_start=window_start,
@@ -187,28 +243,28 @@ class A3PCCModel(nn.Module):
             local_readout=local_output,
             pre_readout=pre_output,
             responsibility_tokens=tokens,
-            conditional=conditional,
         )
+
+    def conditional(self, encoded: EncodedInterfaces, prefix_states: Tensor) -> HeadStepOutput:
+        validate_prefix_states(prefix_states, encoded.interface_mask)
+        tokens = encoded.responsibility_tokens
+        return self.head(tokens.r_loc, tokens.r_ctx, tokens.r_gate, encoded.query,
+                         prefix_states, encoded.interface_mask)
+
+    def infer_encoded(self, encoded: EncodedInterfaces) -> ExactInferenceOutput:
+        """Enumerate the selected Head without re-encoding the waveform."""
+        tokens = encoded.responsibility_tokens
+        return enumerate_pcc(self.head, tokens.r_loc, tokens.r_ctx, tokens.r_gate,
+                             encoded.query, encoded.interface_mask)
 
     def infer_exact(self, batch: InterfaceBatch) -> ExactInferenceOutput:
         """Run exact inference for the engineering range 1 <= K <= 6."""
 
-        reference_prefix = torch.zeros_like(batch.interface_mask, dtype=torch.long)
-        encoded = self.forward(batch, reference_prefix)
-        tokens = encoded.responsibility_tokens
-        return enumerate_pcc(
-            self.pcc,
-            tokens.r_loc,
-            tokens.r_ctx,
-            tokens.r_gate,
-            encoded.query,
-            batch.interface_mask,
-        )
+        return self.infer_encoded(self.encode(batch))
 
     def _validate_structural_inputs(
         self,
         batch: InterfaceBatch,
-        prefix_states: Tensor,
     ) -> None:
         batch_size, kmax = batch.interface_mask.shape
         if kmax > self.max_interfaces:
@@ -216,21 +272,14 @@ class A3PCCModel(nn.Module):
                 f"Kmax={kmax} exceeds the configured boundary of {self.max_interfaces}."
             )
         valid_counts = batch.interface_mask.sum(dim=1)
+        if batch_size == 0 or torch.any(valid_counts == 0):
+            raise ValueError("Every sample must have at least one valid interface.")
         expected_mask = (
             torch.arange(kmax, device=batch.interface_mask.device).unsqueeze(0)
             < valid_counts.unsqueeze(1)
         )
         if not torch.equal(batch.interface_mask, expected_mask):
             raise ValueError("interface_mask must describe one contiguous ordered prefix.")
-        if prefix_states.shape != (batch_size, kmax):
-            raise ValueError("prefix_states must have shape [B, Kmax].")
-        if prefix_states.device != batch.interface_mask.device:
-            raise ValueError("prefix_states and batch tensors must share a device.")
-        valid_states = prefix_states[batch.interface_mask]
-        if torch.is_floating_point(valid_states) or torch.any(
-            (valid_states != 0) & (valid_states != 1)
-        ):
-            raise ValueError("prefix_states must be binary on valid interface slots.")
 
     @staticmethod
     def _sample_windows(batch: InterfaceBatch) -> tuple[Tensor, Tensor, Tensor]:
@@ -258,4 +307,6 @@ class A3PCCModel(nn.Module):
         return window_start, window_end, tau
 
 
-__all__ = ["A3PCCModel", "IntegratedPCCOutput"]
+A3Model = A3PCCModel
+
+__all__ = ["A3Model", "A3PCCModel", "EncodedInterfaces", "HEAD_TYPES", "HeadType", "IntegratedPCCOutput"]

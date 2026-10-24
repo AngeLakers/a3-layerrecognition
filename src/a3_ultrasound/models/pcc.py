@@ -14,12 +14,32 @@ LocalBaseType = Literal["linear", "mlp"]
 
 
 @dataclass(frozen=True)
-class PCCStepOutput:
+class HeadStepOutput:
     logits: Tensor
     base_logodds: Tensor
-    correction: Tensor
-    gate: Tensor
-    prefix_hidden: Tensor
+    correction: Tensor | None = None
+    gate: Tensor | None = None
+    prefix_hidden: Tensor | None = None
+
+
+# Keep the historical constructor/output name for existing PCC callers.
+PCCStepOutput = HeadStepOutput
+
+
+def validate_prefix_states(prefix_states: Tensor, interface_mask: Tensor) -> Tensor:
+    """Reject invalid real states; replace padding only before embedding lookup."""
+    if interface_mask.ndim != 2 or interface_mask.dtype != torch.bool:
+        raise ValueError("interface_mask must be bool with shape [B, Kmax].")
+    if prefix_states.shape != interface_mask.shape:
+        raise ValueError("prefix_states must have shape [B, Kmax].")
+    if prefix_states.device != interface_mask.device:
+        raise ValueError("prefix_states and interface_mask must share a device.")
+    if prefix_states.dtype not in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8, torch.bool):
+        raise ValueError("prefix_states must be integer binary states on valid slots.")
+    valid_states = prefix_states[interface_mask]
+    if torch.any((valid_states != 0) & (valid_states != 1)):
+        raise ValueError("prefix_states must be binary on valid interface slots.")
+    return torch.where(interface_mask, prefix_states, 0).to(dtype=torch.long)
 
 
 class LocalBaseScorer(nn.Module):
@@ -82,7 +102,7 @@ class SharedPrefixGRUEncoder(nn.Module):
         if interface_mask.shape != (batch_size, kmax) or interface_mask.dtype != torch.bool:
             raise ValueError("interface_mask must be bool with shape [B, Kmax].")
 
-        safe_states = prefix_states.to(dtype=torch.long).clamp(min=0, max=1)
+        safe_states = validate_prefix_states(prefix_states, interface_mask)
         embedded = self.state_embedding(safe_states)
         hidden = query.new_zeros((batch_size, self.hidden_dim))
         history: list[Tensor] = []
@@ -221,9 +241,11 @@ class PCCConditionalStep(nn.Module):
 
 
 __all__ = [
+    "HeadStepOutput",
     "LocalBaseScorer",
     "LocalBaseType",
     "PCCConditionalStep",
     "PCCStepOutput",
     "SharedPrefixGRUEncoder",
+    "validate_prefix_states",
 ]

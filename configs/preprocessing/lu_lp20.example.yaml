@@ -1,0 +1,11 @@
+# Example for previously inspected LU exports ONLY; clone and verify for new batches.
+schema_version: a3-rf-preprocessing-v1
+preprocessing_id: lu-fixed131-lp20-pad256-v1
+acquisition:
+  probe_mhz: 10
+  gain_db: 18
+  batch_id: LU-10M18-example
+processing:
+  sample_rate_hz: 200000000
+  normalization_divisor: 131
+  padlen: 256
