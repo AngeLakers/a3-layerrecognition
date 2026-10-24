@@ -94,6 +94,7 @@ def _encode_by_valid_length(
     encoder: nn.Module,
     *,
     output_dim: int,
+    canonical_per_trace: bool = False,
 ) -> TemporalBackboneOutput:
     """Crop before encoding so padded tails cannot affect valid features."""
 
@@ -108,7 +109,11 @@ def _encode_by_valid_length(
             as_tuple=False,
         ).squeeze(1)
         group_input = x_raw.index_select(0, batch_indices)[:, None, :valid_length]
-        group_features = encoder(group_input)
+        # GN is sample-independent mathematically. Use identical trunk call
+        # shapes for bit-stable FP32 features across batch compositions; some
+        # batched convolution kernels otherwise differ by >1e-5 on real RF.
+        group_features = (torch.cat([encoder(x.unsqueeze(0)) for x in group_input],dim=0)
+                          if canonical_per_trace else encoder(group_input))
         if group_features.ndim != 3:
             raise RuntimeError("Temporal backbone trunk must return [B, C, L].")
         if group_features.shape[1] != output_dim:
@@ -241,6 +246,7 @@ class TsaiTimePreservingBackbone(nn.Module):
         feature_stage: TsaiFeatureStage = "final_pre_pool",
         inception_nf: int = 32,
         fcn_layers: Sequence[int] = (128, 256, 128),
+        backbone_norm: str = "batch",
     ) -> None:
         super().__init__()
         resolved_stage = "stage3" if feature_stage == "final_pre_pool" else feature_stage
@@ -293,6 +299,26 @@ class TsaiTimePreservingBackbone(nn.Module):
         self.feature_stage = feature_stage
         self.output_dim = int(output_dims[stage_index - 1])
         self.trunk = nn.Sequential(*available_modules[:stage_index])
+        if backbone_norm not in ("batch", "group8"):
+            raise ValueError("backbone_norm must be batch or group8.")
+        self.backbone_norm = backbone_norm
+        if backbone_norm == "group8":
+            self._replace_batch_norm(self.trunk)
+
+    @staticmethod
+    def _replace_batch_norm(module: nn.Module) -> None:
+        for name, child in list(module.named_children()):
+            if isinstance(child, nn.BatchNorm1d):
+                if child.num_features % 8:
+                    raise ValueError("group8 requires channels divisible by 8.")
+                norm = nn.GroupNorm(8, child.num_features, eps=1e-5, affine=True)
+                if child.affine:
+                    with torch.no_grad():
+                        norm.weight.copy_(child.weight)
+                        norm.bias.copy_(child.bias)
+                setattr(module, name, norm)
+            else:
+                TsaiTimePreservingBackbone._replace_batch_norm(child)
 
     def forward(self, x_raw: Tensor, length_mask: Tensor) -> TemporalBackboneOutput:
         return _encode_by_valid_length(
@@ -300,6 +326,7 @@ class TsaiTimePreservingBackbone(nn.Module):
             length_mask,
             self.trunk,
             output_dim=self.output_dim,
+            canonical_per_trace=self.backbone_norm == "group8",
         )
 
 

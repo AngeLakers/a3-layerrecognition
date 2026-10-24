@@ -1,0 +1,94 @@
+{
+  "schema_version": "a3-stream-run-v1",
+  "catalog": "<CATALOG_JSON>",
+  "folds": [
+    {
+      "fold": "F1",
+      "train": [
+        "TCL3-2",
+        "TCL3-3",
+        "TCL3-5",
+        "TCL3-6",
+        "TCL4-3",
+        "TCL4-4",
+        "薄"
+      ],
+      "validation": [
+        "TCL3-4",
+        "TCL4-2",
+        "厚2"
+      ],
+      "test": [
+        "TCL3-1",
+        "TCL4-1",
+        "厚1"
+      ]
+    }
+  ],
+  "seeds": [
+    23
+  ],
+  "heads": [
+    "proposed",
+    "vanilla_chain",
+    "local_independent"
+  ],
+  "model": {
+    "backbone": "resnet1d",
+    "backbone_stage": "final_pre_pool",
+    "query_dim": 64,
+    "attention_dim": 64,
+    "token_dim": 64,
+    "prefix_dim": 32,
+    "pcc_hidden_dim": 64,
+    "common_feature_dim": 64,
+    "max_interfaces": 6,
+    "rho": 3.0,
+    "local_base_type": "mlp",
+    "local_base_hidden_dim": 32,
+    "readout_scope": "indexed",
+    "pre_query_conditioned": false,
+    "local_prior_sigma_samples": 36.0,
+    "local_prior_strength": 0.5,
+    "architecture_version": "a3-v1.4",
+    "backbone_norm": "group8",
+    "query_view": "position2"
+  },
+  "training": {
+    "seed": 23,
+    "epochs": 40,
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0,
+    "lambda_local": 0.3,
+    "positive_class_weight": null,
+    "disable_local_auxiliary": false,
+    "patience": 10,
+    "scheduler_step_size": null,
+    "scheduler_gamma": 0.5,
+    "device": "cuda",
+    "real_training_permitted": true,
+    "min_epochs": 15,
+    "min_delta": 0.002,
+    "normal_fpr_limit": 0.02,
+    "selection_rule": "guarded_joint",
+    "outer_evaluation_permitted": false
+  },
+  "normal_to_positive": 3,
+  "formal_training_permitted": false,
+  "outer_evaluation_permitted": false,
+  "evaluation_batch_size": 128,
+  "validation_selection_root": "<FROZEN_VALIDATION_ROOT>",
+  "label_version": "V2",
+  "development_stage": "v1.4-freeze",
+  "epoch_selection_root": "<FROZEN_EPOCH_INDEX_ROOT>",
+  "save_epoch_checkpoints": true,
+  "protocol": "V1.4-freeze",
+  "catalog_signature": "3529afffd300e75dfd2075816e5e324822873c8efee1578302ee3f73ffe675ae",
+  "epoch_manifest_sha256": "c5167edf2ee061113155e5d1c31b501d7e907574257906d62fb51347c3515e90",
+  "validation_sha256": "a782c0b51b1550c674ef1fd716c8126098b45d27e4a3e10269f119a8178daccd",
+  "automatic_screening": false,
+  "freeze_training_permitted": false,
+  "source_commit": "<COMMIT_SHA>",
+  "save_best_correction_npz": true
+}

@@ -10,7 +10,7 @@ interfaces:
   metadata_schema: a3-interface-meta-v3
   metadata_layout: [B, Kmax, 5]
   metadata_order: [k_over_K, tau_over_T, z_over_zmax, delta_minus_over_T, delta_plus_over_T]
-  query_field_indices: [0, 1, 2]
+  query_field_indices: [0, 2]
   prior_field_indices: [1, 3, 4]
   interface_mask_layout: [B, Kmax]
   label_mask_layout: [B, Kmax]

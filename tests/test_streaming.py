@@ -49,6 +49,58 @@ def toy_catalog(tmp_path):
     return path
 
 
+def test_guarded_best_npz_and_summary_bind_config_and_commit_on_synthetic_data(toy_catalog,tmp_path):
+    import hashlib
+    cfg=json.loads((Path(__file__).parents[1]/'configs/experiment/a3_13board_stream_v3.json').read_text(encoding='utf-8'))
+    cfg.update(catalog=str(toy_catalog),folds=[dict(fold='F1',train=['AL'],validation=['TC'],test=['heldout'])],
+        formal_training_permitted=True,outer_evaluation_permitted=False,frozen_selection_root=str(tmp_path),
+        save_best_correction_npz=True)
+    cfg.pop('validation_selection_root',None)
+    cfg['model'].update(backbone='tcn',rho=3.)
+    cfg['training'].update(device='cpu',epochs=1,batch_size=4,selection_rule='guarded_joint',normal_fpr_limit=1.)
+    data=RFShardDataset(toy_catalog,['AL'],training=True,seed=23)
+    np.save(tmp_path/'F1_s23.npy',data.refs)
+    path=tmp_path/'run.json';path.write_text(json.dumps(cfg));out=tmp_path/'run'
+    result=train(path,out,fold_name='F1',head='proposed',seed=23)
+    expected=hashlib.sha256(path.read_bytes()).hexdigest()
+    assert result['config_sha256']==expected and result['commit_hash']
+    for kind in ('guarded','fallback'):
+        checkpoint=torch.load(out/f'best_{kind}.pt',map_location='cpu',weights_only=True)
+        with np.load(out/f'best_{kind}_diagnostics.npz',allow_pickle=False) as pack:
+            meta=json.loads(str(pack['metadata_json']))
+            assert meta['epoch']==checkpoint['epoch']==1
+            assert meta['config_sha256']==expected
+            assert meta['commit_hash']==result['commit_hash']
+            assert len(pack['g'])==24
+
+
+def test_interleaved_guarded_fallback_checkpoint_npz_epochs(toy_catalog,tmp_path,monkeypatch):
+    import a3_ultrasound.stream_training as runner
+    cfg=json.loads((Path(__file__).parents[1]/'configs/experiment/a3_13board_stream_v3.json').read_text(encoding='utf-8'))
+    cfg.update(catalog=str(toy_catalog),folds=[dict(fold='F1',train=['AL'],validation=['TC'],test=['heldout'])],
+        formal_training_permitted=True,outer_evaluation_permitted=False,frozen_selection_root=str(tmp_path),save_best_correction_npz=True)
+    cfg.pop('validation_selection_root',None)
+    cfg['model'].update(backbone='tcn',rho=3.)
+    cfg['training'].update(device='cpu',epochs=5,batch_size=4,selection_rule='guarded_joint',normal_fpr_limit=.02,min_epochs=15)
+    data=RFShardDataset(toy_catalog,['AL'],training=True,seed=23);np.save(tmp_path/'F1_s23.npy',data.refs)
+    original=runner.evaluate_stream
+    scores={1:(.6,.01),2:(.7,.03),3:(.65,.01),4:(.69,.04),5:(.8,.05)}
+    def controlled(*args,**kwargs):
+        metrics=original(*args,**kwargs)
+        if kwargs.get('phase')=='validation':
+            score,fpr=scores[kwargs['epoch']]
+            metrics['reliable'].update(positive_joint_map_accuracy=score,normal_joint_false_positive_rate=fpr,joint_nll=.4)
+        return metrics
+    monkeypatch.setattr(runner,'evaluate_stream',controlled)
+    path=tmp_path/'run.json';path.write_text(json.dumps(cfg));out=tmp_path/'run'
+    runner.train(path,out,fold_name='F1',head='proposed',seed=23)
+    for kind,expected in [('guarded',3),('fallback',5)]:
+        cp=torch.load(out/f'best_{kind}.pt',map_location='cpu',weights_only=True)
+        with np.load(out/f'best_{kind}_diagnostics.npz',allow_pickle=False) as pack:
+            assert json.loads(str(pack['metadata_json']))['epoch']==cp['epoch']==expected
+    assert not (out/'screening_stop.json').exists()
+
+
 def test_lazy_sampling_mixed_k_and_late_tail(toy_catalog):
     a=RFShardDataset(toy_catalog,['AL','TC'],training=True,seed=23,normal_ratio=3)
     b=RFShardDataset(toy_catalog,['AL','TC'],training=True,seed=23,normal_ratio=3)
@@ -67,6 +119,35 @@ def test_evaluation_keeps_natural_counts_and_unknown_mask(toy_catalog):
     assert len(a)==12
     batch=a.make_batch([2]);assert not batch.label_mask[0,0]
     assert a.annotations([2])[0]['quality_flagged'] is True
+
+
+def test_v14_stage2_uses_actual_epoch_refs_and_never_opens_outer(toy_catalog,tmp_path):
+    from a3_ultrasound.data.epoch_sampling import freeze_epochs
+    from a3_ultrasound.stream_training import catalog_signature
+    cfg=json.loads((Path(__file__).parents[1]/'configs/experiment/a3_13board_stream_v3.json').read_text(encoding='utf-8'))
+    fold={'fold':'F1','train':['AL'],'validation':['TC'],'test':['heldout']}
+    catalog=json.loads(toy_catalog.read_text());sig=catalog_signature(catalog)
+    d=RFShardDataset(toy_catalog,['AL'],training=True,seed=23)
+    eroot=tmp_path/'epochs';freeze_epochs(d,eroot,seed=23,epochs=1,catalog_signature=sig,positive_fraction=.2)
+    results=[dict(status='COMPLETED_DIAGNOSTIC',epochs=15,rho=rho,shadow=shadow,seed=23,
+        final_metrics=dict(correction_saturation_fraction_MAP_path=sat,positive_joint_map_accuracy=.8,
+                           normal_joint_false_positive_rate=0.)) for rho,shadow,sat in [(1,False,.99),(3,False,.3),(3,True,.3)]]
+    screen=tmp_path/'screen.json';screen.write_text(json.dumps(dict(status='COMPLETED',results=results,
+        passed_candidates=['proposed_rho3','proposed_shadow_aux_rho3'],fold=fold,seed=23,catalog_signature=sig)))
+    cfg.update(catalog=str(toy_catalog),folds=[fold],seeds=[23],heads=['proposed'],development_stage=2,
+        development_training_permitted=True,formal_training_permitted=False,outer_evaluation_permitted=False,
+        epoch_selection_root=str(eroot),stage1_result=str(screen),save_epoch_checkpoints=True)
+    cfg.pop('validation_selection_root',None)
+    cfg['model'].update(architecture_version='a3-v1.4',backbone_norm='group8',query_view='position2',rho=3.)
+    cfg['training'].update(device='cpu',epochs=1,batch_size=4,patience=10,min_epochs=15,selection_rule='guarded_joint')
+    path=tmp_path/'new.json';path.write_text(json.dumps(cfg))
+    out=tmp_path/'stage2';result=train(path,out,fold_name='F1',head='proposed',seed=23)
+    assert result['test_opened'] is False and result['formal_result'] is False
+    assert len(np.load(out/'training_selection.npy'))==4
+    np.testing.assert_array_equal(np.load(out/'training_selection.npy'),np.load(eroot/'epoch_01.npy'))
+    resolved=json.loads((out/'resolved_config.json').read_text(encoding='utf-8'))
+    assert resolved['selection_counts']=={'AL':4}
+    assert (out/'best_fallback.pt').exists()
 
 
 def test_frozen_validation_loader_rejects_training_and_wrong_refs(toy_catalog,tmp_path):

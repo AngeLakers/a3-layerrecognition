@@ -1,5 +1,5 @@
 schema_version: 2
-architecture_version: a3-v1.3
+architecture_version: a3-v1.4
 executable_example: v1_3_synthetic.yaml
 entrypoint: scripts/run_a3.py
 main_training_label_policy: complete_reliable_valid_interfaces
@@ -17,3 +17,15 @@ order_controls:
   K3: all_six_permutations
 output_dir: local/outputs
 real_training_permitted: false
+
+v14_selection:
+  main: positive_joint_map_accuracy_ipw
+  normal_joint_false_positive_limit: 0.02
+  tie: lower_joint_nll
+  max_epochs: 40
+  min_epochs: 15
+  patience: 10
+  min_delta: 0.002
+  outer_evaluation_permitted: false
+  automatic_screening: false
+  freeze_config: v1_4_freeze.json

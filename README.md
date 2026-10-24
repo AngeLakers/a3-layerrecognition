@@ -1,8 +1,12 @@
 # A3 Layer Recognition
 
-当前工程版本：V1.3。利用raw RF与已知固定界面先验，输出逐界面状态、joint posterior、MAP和marginals。
+当前工程版本为 **V1.4**（源码包1.4.0，冻结协议V1.4-freeze，标签V2）。冻结运行仅含Proposed rho=3、Vanilla、Independent，采用GN8、两字段Query、完整联合选模、2%正常误报护栏及逐epoch正常重抽；B8预算40/15/10、min_delta=.002。饱和率、方向和旧1%误报不触发自动淘汰，B8常规早停保留。outer保持关闭，源码冻结与软件测试不代表科研性能验收。
 
-2026-10-24代码快照包含四Head训练与精确联合推断、流式数据及加权验证、Labels V2修订工具、训练队列/检查点镜像/成功收据校验，以及OOF汇总入口。这是工程实现状态，不代表方法性能或科研验收通过。当前训练协议仍按最深界面F1、同分联合NLL选模；整体界面选模及训练预算的新方案尚未实施。
+旧V1.3 commit113a02d及其实验结果保留为历史，legacy3/batch配置可严格加载旧checkpoint；新模型须显式配置a3-v1.4/group8/position2。原60格队列不接管本轮诊断。
+
+当前冻结配置为 [v1_4_freeze.json](configs/experiment/v1_4_freeze.json)，发布模板中的真实训练许可为false、路径和commit为占位符；克隆或运行单元测试不会自动启动真实训练。历史D1/D2、rho1、shadow与缓存入口保留用于追溯，不属于冻结三格的启动清单。
+
+每个真实运行的summary记录commit_hash与实际配置文件config_sha256。Proposed的best_guarded.pt、best_fallback.pt各有对应epoch的best_*_diagnostics.npz，保存逐非首界面g/c/g*c、上游truth/mask与身份/IPW；没有满足2%护栏的epoch时不伪造guarded checkpoint，guard_violated=true且fallback只作诊断。新多缺陷漏报、单报多及上游异常条件下游召回仅记录、不选模。
 
 本仓库不包含原始RF、数据索引数组、训练权重或本机实验产物。真实数据配置和运维脚本保留登记环境的路径与SSH别名，跨机器使用须另配本地路径；克隆仓库不会自动启动训练。架构正文的链接指向独立资料库，GitHub不会直接展示该外部资料。
 
@@ -10,7 +14,8 @@
 
 ## 当前入口
 
-- [完整网络与API](docs/ARCHITECTURE_V1_3.md)：四Head、输入/监督合同、训练评估与已实现消融。
+- [V1.4架构与验证边界](docs/ARCHITECTURE_V1_4.md)
+- [历史V1.3网络与API](docs/ARCHITECTURE_V1_3.md)：四Head、输入/监督合同、训练评估与已实现消融。
 - [代码审阅指南](docs/REVIEW_GUIDE.md)：源码、测试及待验证项。
 - [V1.3验证记录](docs/VALIDATION_V1_3.md)：2026-10-01的181项单测、四Head短合成训练与12项CUDA合成smoke；本次文档清理未重跑。
 

@@ -1,13 +1,18 @@
 schema_version: 5
-architecture_version: a3-v1.3
+architecture_version: a3-v1.4
 
 assembly:
-  head_type: [local_independent, local_pre_independent, vanilla_chain, proposed]
+  head_type: [local_independent, local_pre_independent, vanilla_chain, proposed, proposed_shadow_aux]
   interfaces: [encode, conditional, infer_exact]
   encoded_contains_labels: false
   model_weights_shared_across_comparisons: false
+  frozen_run_heads: [proposed, vanilla_chain, local_independent]
+  frozen_proposed_rho: 3
 
 backbone:
+  backbone_norm: group8
+  group_norm_groups: 8
+  group_norm_eps: 0.00001
   formal_training_candidates: [resnet1d, inceptiontime, fcn1d]
   smoke_only: [tcn]
   feature_stage:
@@ -52,7 +57,7 @@ indexed_readout:
 interface_query:
   metadata_schema: a3-interface-meta-v3
   metadata_fields: 5
-  query_fields: [k_over_K, tau_over_T, z_over_zmax]
+  query_fields: [k_over_K, z_over_zmax]
   output_layer_norm: forbidden
   absolute_interface_id_embedding: false
   K_cap_input: forbidden

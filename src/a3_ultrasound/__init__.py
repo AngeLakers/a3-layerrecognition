@@ -1,8 +1,9 @@
-"""A3 V1.1 fixed-interface state-inference prototype.
+"""A3 V1.4 fixed-interface inference and versioned training utilities.
 
-This package only contains the structure/API prototype and synthetic-test
-components. It intentionally excludes real-data training and experiment claims.
+Software validation does not establish research performance claims.
 """
+
+__version__ = "1.4.0"
 
 from .schema import (
     INTERFACE_META_DIM,

@@ -34,8 +34,8 @@ from a3_ultrasound.models.responsibility_tokens import (
 from a3_ultrasound.schema import InterfaceBatch
 
 
-HeadType = Literal["local_independent", "local_pre_independent", "vanilla_chain", "proposed"]
-HEAD_TYPES = ("local_independent", "local_pre_independent", "vanilla_chain", "proposed")
+HeadType = Literal["local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux"]
+HEAD_TYPES = ("local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux")
 
 
 @dataclass(frozen=True)
@@ -88,6 +88,7 @@ class A3PCCModel(nn.Module):
         pre_query_conditioned: bool = False,
         local_prior_sigma_samples: float | None = None,
         local_prior_strength: float = 1.0,
+        query_view: str = "position2",
     ) -> None:
         super().__init__()
         if any(
@@ -125,7 +126,7 @@ class A3PCCModel(nn.Module):
             feature_dim,
             common_feature_dim,
         )
-        self.query_encoder = InterfaceQueryEncoder(query_dim=query_dim)
+        self.query_encoder = InterfaceQueryEncoder(query_dim=query_dim, query_view=query_view)
         self.local_readout = IndexedReadout(
             feature_dim=common_feature_dim,
             query_dim=query_dim,

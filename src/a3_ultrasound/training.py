@@ -26,10 +26,15 @@ from a3_ultrasound.models.backbone import LengthGroupedTCNBackbone, TsaiTimePres
 from a3_ultrasound.models.integrated import A3Model, HEAD_TYPES
 from a3_ultrasound.models.losses import head_training_loss, validate_complete_training_batch
 from a3_ultrasound.schema import InterfaceBatch
+from a3_ultrasound.selection import GuardedSelector
+from a3_ultrasound.stream_metrics import PredictionAccumulator
 
 
 @dataclass(frozen=True)
 class ModelConfig:
+    architecture_version: str = "a3-v1.3"
+    backbone_norm: str = "batch"
+    query_view: str = "legacy3"
     head_type: str = "proposed"
     backbone: str = "resnet1d"
     backbone_stage: str = "final_pre_pool"
@@ -64,9 +69,18 @@ class TrainingConfig:
     scheduler_gamma: float = 0.5
     device: str = "cpu"
     real_training_permitted: bool = False
+    selection_rule: str = "legacy_deepest"
+    min_epochs: int = 15
+    min_delta: float = 0.002
+    normal_fpr_limit: float = 0.01
+    outer_evaluation_permitted: bool = False
 
 
 def build_model(config: ModelConfig) -> A3Model:
+    if config.architecture_version not in ("a3-v1.3", "a3-v1.4"):
+        raise ValueError("Unknown architecture_version.")
+    if config.architecture_version == "a3-v1.4" and (config.backbone_norm != "group8" or config.query_view != "position2"):
+        raise ValueError("V1.4 requires group8 and position2.")
     if config.head_type not in HEAD_TYPES:
         raise ValueError("Unknown head_type.")
     if config.rho not in (1.0, 2.0, 3.0):
@@ -79,10 +93,13 @@ def build_model(config: ModelConfig) -> A3Model:
         backbone = LengthGroupedTCNBackbone(channels=(8, 8), kernel_size=3,
                                            dilations=(1, 2), use_norm=None)
     else:
-        backbone = TsaiTimePreservingBackbone(config.backbone, feature_stage=config.backbone_stage)
+        backbone = TsaiTimePreservingBackbone(config.backbone, feature_stage=config.backbone_stage,
+                                              backbone_norm=config.backbone_norm)
     kwargs = asdict(config)
     kwargs.pop("backbone")
     kwargs.pop("backbone_stage")
+    kwargs.pop("backbone_norm")
+    kwargs.pop("architecture_version")
     return A3Model(backbone=backbone, **kwargs)
 
 
@@ -271,7 +288,7 @@ def evaluate(model: A3Model, data: TensorDataset, *, batch_size: int = 16,
                     "raw_logZ": raw_logz[i],
                     "conditional_probability_range": values(exact.conditional_probability_range),
                     "indexed_local_token_counts": values(encoded.local_token_diagnostics.counts),
-                    "rho": model.head.rho if model.head_type == "proposed" else None,
+                    "rho": getattr(model.head, "rho", None),
                     "correction_diagnostic_path": "inferred_joint_MAP" if diagnostic.gate is not None else None,
                     "gate": values(diagnostic.gate) if diagnostic.gate is not None else None,
                     "correction": values(diagnostic.correction) if diagnostic.correction is not None else None,
@@ -282,7 +299,11 @@ def evaluate(model: A3Model, data: TensorDataset, *, batch_size: int = 16,
                     row["correction_saturation_fraction"] = (float((eligible.abs() >= 0.95 * model.head.rho).float().mean())
                                                              if eligible.numel() else None)
                 rows.append(row)
-        return summarize_predictions(rows), rows
+        metrics=summarize_predictions(rows)
+        accumulator=PredictionAccumulator()
+        for row in rows:accumulator.add(row)
+        metrics.update(accumulator.result())
+        return metrics, rows
     finally:
         model.train(was_training)
 
@@ -306,10 +327,17 @@ def _code_version() -> dict[str, Any]:
                                 capture_output=True, text=True, check=True).stdout.splitlines()
         return {"commit": commit, "dirty": bool(status), "changed_path_count": len(status)}
     except (OSError, subprocess.CalledProcessError):
+        revision = repository / 'SOURCE_REVISION.json'
+        if revision.is_file():
+            value = json.loads(revision.read_text(encoding='utf-8'))
+            return {"commit": value.get("commit"), "dirty": False, "status": "frozen SOURCE_REVISION metadata"}
         return {"commit": None, "dirty": None, "status": "git unavailable"}
 
 
 def _validate_training_config(config: TrainingConfig) -> None:
+    if config.selection_rule not in ("legacy_deepest", "guarded_joint"):
+        raise ValueError("Unknown selection rule.")
+    GuardedSelector(config.min_epochs,config.patience,config.min_delta,config.normal_fpr_limit)
     for name in ("epochs", "batch_size", "patience"):
         value = getattr(config, name)
         if type(value) is not int or value < 1:
@@ -369,7 +397,7 @@ def run_training(model_config: ModelConfig, config: TrainingConfig,
                  if config.scheduler_step_size is not None else None)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
-    resolved = {"architecture_version": "a3-v1.3", "model": asdict(model_config), "training": asdict(config),
+    resolved = {"architecture_version": model_config.architecture_version, "model": asdict(model_config), "training": asdict(config),
                 "data_kind": data_kind, "effective_lambda_local": 0.0 if model.head_type == "local_independent" else config.lambda_local,
                 "optimizer": "AdamW", "scheduler": "StepLR" if scheduler else None,
                 "selection": "validation deepest specimen macro-F1, tie: lower joint NLL",
@@ -385,6 +413,9 @@ def run_training(model_config: ModelConfig, config: TrainingConfig,
     history = []
     best_key = (-math.inf, -math.inf)
     stale = 0
+    selector = GuardedSelector(config.min_epochs,config.patience,config.min_delta,config.normal_fpr_limit) if config.selection_rule == "guarded_joint" else None
+    resolved["selection"] = config.selection_rule
+    _write_json(output_dir / "resolved_config.json", resolved)
     try:
         for epoch in range(1, config.epochs + 1):
             model.train()
@@ -414,31 +445,41 @@ def run_training(model_config: ModelConfig, config: TrainingConfig,
             record = {"epoch": epoch, "total_loss": total / count, "main_loss": chain_total / count,
                       "local_loss": local_total / count, "learning_rate": optimizer.param_groups[0]["lr"],
                       "validation": validation}
+            if selector:
+                record["selection"] = selector.update(epoch,validation)
+                payload = {"architecture_version":model_config.architecture_version,"epoch":epoch,
+                    "model_state_dict":model.state_dict(),"optimizer_state_dict":optimizer.state_dict(),
+                    "resolved_config":resolved,"validation":validation,"selection_state":selector.state_dict()}
+                if record["selection"]["guarded_updated"]:torch.save(payload,output_dir/"best_guarded.pt")
+                if record["selection"]["fallback_updated"]:torch.save(payload,output_dir/"best_fallback.pt")
             history.append(record)
             _write_json(output_dir / "history.json", history)
             if scheduler is not None:
                 scheduler.step()
-            if key > best_key:
+            if selector is None and key > best_key:
                 best_key, stale = key, 0
-                checkpoint = {"architecture_version": "a3-v1.3", "epoch": epoch,
+                checkpoint = {"architecture_version": model_config.architecture_version, "epoch": epoch,
                               "model_state_dict": model.state_dict(), "optimizer_state_dict": optimizer.state_dict(),
                               "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
                               "resolved_config": resolved, "validation": validation}
                 torch.save(checkpoint, output_dir / "best.pt")
             else:
                 stale += 1
-            if stale >= config.patience:
+            if (record["selection"]["stop"] if selector else stale >= config.patience):
                 break
-        checkpoint = torch.load(output_dir / "best.pt", map_location=config.device, weights_only=True)
+        selected_name = ("best_guarded.pt" if selector.guarded else "best_fallback.pt") if selector else "best.pt"
+        checkpoint = torch.load(output_dir / selected_name, map_location=config.device, weights_only=True)
         model.load_state_dict(checkpoint["model_state_dict"])
         metrics = {}
-        for name in ("validation", "test"):
+        for name in (("validation", "test") if data_kind == "synthetic" or config.outer_evaluation_permitted else ("validation",)):
             metrics[name], rows = evaluate(model, datasets[name], batch_size=config.batch_size, device=config.device)
             _write_predictions(output_dir / f"{name}_predictions.jsonl", rows)
         summary = {"status": "completed", "data_kind": data_kind, "best_epoch": checkpoint["epoch"],
                    "epochs_run": len(history), "metrics": metrics,
                    "wall_time_seconds": time.perf_counter() - started,
                    "performance_claims_released": False, "real_training_gate_changed": False}
+        summary.update(selected_checkpoint=selected_name, guard_violated=selector.guarded is None if selector else None,
+                       test_opened="test" in metrics)
         _write_json(output_dir / "summary.json", summary)
         return summary
     except Exception as exc:
@@ -496,7 +537,7 @@ def synthetic_datasets(seed: int, samples_per_split: int = 8) -> dict[str, Tenso
 
 def load_checkpoint(path: Path, *, device: str = "cpu") -> tuple[A3Model, dict[str, Any]]:
     checkpoint = torch.load(path, map_location=device, weights_only=True)
-    if checkpoint.get("architecture_version") != "a3-v1.3":
+    if checkpoint.get("architecture_version") not in ("a3-v1.3", "a3-v1.4"):
         raise ValueError("Expected a V1.3 checkpoint from the common runner.")
     model = build_model(ModelConfig(**checkpoint["resolved_config"]["model"])).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -508,7 +549,7 @@ def run_from_config(path: Path, output_dir: Path, *, head_type: str | None = Non
                     checkpoint_path: Path | None = None, evaluate_split: str = "test") -> dict[str, Any]:
     path = Path(path)
     config = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if config.get("schema_version") != "a3-run-v1.3":
+    if config.get("schema_version") not in ("a3-run-v1.3", "a3-run-v1.4"):
         raise ValueError("Expected a3-run-v1.3 config.")
     model_values = copy.deepcopy(config.get("model", {}))
     if head_type is not None:
@@ -529,8 +570,10 @@ def run_from_config(path: Path, output_dir: Path, *, head_type: str | None = Non
         return run_training(model_config, training_config, datasets, output_dir,
                             data_kind=manifest["data_kind"], input_manifest=manifest)
     model, checkpoint = load_checkpoint(checkpoint_path, device=training_config.device)
-    if asdict(model_config) != checkpoint["resolved_config"]["model"]:
+    if asdict(model_config) != asdict(ModelConfig(**checkpoint["resolved_config"]["model"])):
         raise ValueError("Evaluation model config must match checkpoint; no ignored Head overrides.")
+    if evaluate_split == "test" and manifest["data_kind"] == "real" and not training_config.outer_evaluation_permitted:
+        raise ValueError("Outer evaluation remains closed.")
     if evaluate_split != "train":
         training_membership = checkpoint["resolved_config"]["split_membership"]["train"]
         if set(datasets[evaluate_split].specimen_ids) & set(training_membership["specimen_ids"]):

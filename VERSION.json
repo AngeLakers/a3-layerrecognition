@@ -1,0 +1,9 @@
+{
+  "architecture_version": "a3-v1.4",
+  "package_version": "1.4.0",
+  "protocol_version": "V1.4-freeze",
+  "labels": "V2",
+  "base_commit": "113a02d9e01615b05abeb8c6717680eee6f675b2",
+  "status": "frozen_protocol",
+  "formal_training_permitted": false
+}

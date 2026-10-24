@@ -170,7 +170,7 @@ def test_v1_2_model_schema_records_user_approved_boundaries() -> None:
             encoding="utf-8"
         )
     )
-    assert schema["architecture_version"] == "a3-v1.3"
+    assert schema["architecture_version"] == "a3-v1.4"
     assert schema["backbone"]["smoke_only"] == ["tcn"]
     assert schema["backbone"]["formal_training_candidates"] == [
         "resnet1d",

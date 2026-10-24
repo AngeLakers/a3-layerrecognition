@@ -34,6 +34,7 @@ def pcc_training_loss(
     label_mask: Tensor | None = None,
     positive_class_weight: float | Tensor | None = None,
     lambda_local: float = 0.3,
+    shadow_auxiliary: bool = False,
 ) -> PCCLossOutput:
     """Compute truth-prefix PCC and local losses on the frozen scale.
 
@@ -111,9 +112,18 @@ def pcc_training_loss(
     supervised_sample_mask = supervision_mask.any(dim=1)
     safe_counts = supervised_counts.clamp_min(1.0)
     per_sample_chain = (chain_terms * active).sum(dim=1) / safe_counts
-    per_sample_local = (local_terms * active).sum(dim=1) / safe_counts
+    local_mask = supervision_mask
+    if shadow_auxiliary:
+        known = supervision_mask | ~interface_mask
+        upstream_unknown = ((~known).long().cumsum(1) - (~known).long()) > 0
+        positive = ((y == 1) & supervision_mask).long()
+        upstream_bad = (positive.cumsum(1) - positive) > 0
+        local_mask = supervision_mask & ~upstream_bad & ~upstream_unknown
+    local_counts = local_mask.sum(1).clamp_min(1).to(conditional_logits.dtype)
+    per_sample_local = (local_terms * local_mask).sum(dim=1) / local_counts
     chain = per_sample_chain[supervised_sample_mask].mean()
-    local = per_sample_local[supervised_sample_mask].mean()
+    local_samples = local_mask.any(1)
+    local = per_sample_local[local_samples].mean() if local_samples.any() else per_sample_local.sum() * 0.0
     total = chain + resolved_lambda * local
     return PCCLossOutput(
         total=total,
@@ -140,7 +150,7 @@ def head_training_loss(output: HeadStepOutput, batch: InterfaceBatch, *, head_ty
                        disable_local_auxiliary: bool = False) -> PCCLossOutput:
     """Dispatch the main loss; lambda=0 is an explicitly named ablation only."""
     validate_complete_training_batch(batch)
-    if head_type not in ("local_independent", "local_pre_independent", "vanilla_chain", "proposed"):
+    if head_type not in ("local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux"):
         raise ValueError("Unknown head_type for training loss.")
     if disable_local_auxiliary:
         if lambda_local != 0 or head_type == "local_independent":
@@ -150,7 +160,7 @@ def head_training_loss(output: HeadStepOutput, batch: InterfaceBatch, *, head_ty
     effective_lambda = 0.0 if head_type == "local_independent" else lambda_local
     return pcc_training_loss(output.logits, output.base_logodds, batch.y, batch.interface_mask,
                              label_mask=batch.label_mask, positive_class_weight=positive_class_weight,
-                             lambda_local=effective_lambda)
+                             lambda_local=effective_lambda, shadow_auxiliary=head_type == "proposed_shadow_aux")
 
 
 __all__ = ["PCCLossOutput", "pcc_training_loss", "head_training_loss", "validate_complete_training_batch"]

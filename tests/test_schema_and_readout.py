@@ -40,9 +40,9 @@ def test_interface_batch_accepts_only_frozen_network_schema() -> None:
         "normalized_left_tolerance",
         "normalized_right_tolerance",
     )
-    assert QUERY_META_DIM == 3
-    assert QUERY_META_FIELDS == INTERFACE_META_FIELDS[:3]
-    assert QUERY_META_INDICES == (0, 1, 2)
+    assert QUERY_META_DIM == 2
+    assert QUERY_META_FIELDS == (INTERFACE_META_FIELDS[0], INTERFACE_META_FIELDS[2])
+    assert QUERY_META_INDICES == (0, 2)
     assert PRIOR_META_FIELDS == (
         "normalized_tof",
         "normalized_left_tolerance",
@@ -96,7 +96,7 @@ def test_query_ignores_prior_tolerances_but_uses_identity_position_fields() -> N
     torch.testing.assert_close(encoder(changed_tolerances, mask), baseline)
 
     changed_query_field = metadata.clone()
-    changed_query_field[..., 1] += 1.0
+    changed_query_field[..., 2] += 1.0
     assert not torch.allclose(encoder(changed_query_field, mask), baseline)
 
 
