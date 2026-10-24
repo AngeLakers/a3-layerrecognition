@@ -226,15 +226,26 @@ def test_split_leakage_and_real_gate_fail_before_training(tmp_path):
         audit_splits(leaked)
 
 
-def test_npz_manifest_load_and_unlabeled_evaluation(tmp_path):
+@pytest.mark.parametrize('with_physical',[False,True])
+def test_npz_manifest_load_and_unlabeled_evaluation(tmp_path,with_physical):
     data = synthetic_datasets(11, 4)
+    if with_physical:
+        data={name:replace(ds,batch=replace(ds.batch,
+            phys_loc=torch.full((*ds.batch.interface_mask.shape,1),1.25)*ds.batch.interface_mask[...,None],
+            phys_ctx=torch.full((*ds.batch.interface_mask.shape,3),-.5)*ds.batch.interface_mask[...,None]))
+              for name,ds in data.items()}
     for name, dataset in data.items():
-        np.savez(tmp_path / f"{name}.npz", **{key: value.numpy() for key, value in vars(dataset.batch).items()},
+        np.savez(tmp_path / f"{name}.npz", **{key: value.numpy() for key, value in vars(dataset.batch).items() if value is not None},
                  sample_ids=np.array(dataset.sample_ids), specimen_ids=np.array(dataset.specimen_ids))
     manifest = tmp_path / "dataset.yaml"
     manifest.write_text("schema_version: a3-tensor-dataset-v1\ndata_kind: synthetic\npreprocessing_id: toy-v1\nsplit_id: toy-v1\nsplits:\n  train: train.npz\n  validation: validation.npz\n  test: test.npz\n")
     loaded, _ = load_tensor_manifest(manifest)
     torch.testing.assert_close(loaded["train"].batch.x_raw, data["train"].batch.x_raw)
+    if with_physical:
+        torch.testing.assert_close(loaded['train'].batch.phys_loc,data['train'].batch.phys_loc)
+        torch.testing.assert_close(loaded['train'].batch.phys_ctx,data['train'].batch.phys_ctx)
+    else:
+        assert loaded['train'].batch.phys_loc is None and loaded['train'].batch.phys_ctx is None
     unlabeled = replace(loaded["test"], batch=replace(loaded["test"].batch, y=None, label_mask=None))
     metrics, rows = evaluate(build_model(ModelConfig(backbone="tcn")), unlabeled)
     assert metrics["joint_nll"] is None and metrics["labeled_interface_count"] == 0

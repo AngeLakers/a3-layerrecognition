@@ -14,10 +14,14 @@ class RFShardDataset:
     """Load only selected entities; never materialize the full RF tensor."""
 
     def __init__(self, catalog_path, entities, *, training=False, seed=23,
-                 normal_ratio=3, diagnostic_per_class=None):
+                 normal_ratio=3, diagnostic_per_class=None, physical_config=None,
+                 tail_policy=None):
         self.path=Path(catalog_path)
         self.catalog=json.loads(self.path.read_text(encoding='utf-8'))
-        self.config=self.catalog['input_config']
+        self.config=dict(self.catalog['input_config'])
+        if tail_policy is not None:
+            self.config['tail']=dict(self.config['tail'],policy=tail_policy)
+        self.physical_config=physical_config
         self.shards=[]; refs=[]
         requested=list(entities)
         if not requested or len(set(requested))!=len(requested):
@@ -93,10 +97,18 @@ class RFShardDataset:
 
     def make_batch(self,indices,device='cpu'):
         traces=[];metas=[];ys=[];masks=[];label_masks=[]
+        physical_loc=[];physical_ctx=[]
         for index in indices:
             s,i=self.refs[int(index)];shard=self.shards[s];a=shard['arrays'];k=shard['K']
             start=int(a['offsets'][i]);length=int(a['lengths'][i])
-            x,meta,_=transform_trace(shard['rf'][start:start+length],shard,self.config)
+            x,meta,info=transform_trace(shard['rf'][start:start+length],shard,self.config)
+            if self.physical_config is not None:
+                from a3_ultrasound.data.physical_features import energy_log_ratios,physical_tokens
+                p=self.physical_config;tau=np.asarray(info['nominal_tof_samples'])
+                ratios=energy_log_ratios(x,tau-info['halfwidth_samples'],tau+info['halfwidth_samples'],
+                                        front_end=p['front_end_samples'],epsilon=p['epsilon'])
+                loc,ctx=physical_tokens(ratios,mean=p['mean'],std=p['std'])
+                physical_loc.append(loc);physical_ctx.append(ctx)
             y=np.zeros(6,dtype=np.int64);y[:k]=a['y'][i]
             mask=np.arange(6)<k;lm=np.zeros(6,dtype=bool);lm[:k]=a['label_mask'][i]
             if self.training and not lm[:k].all():raise ValueError('Training label became incomplete.')
@@ -106,6 +118,8 @@ class RFShardDataset:
         values={'x_raw':padded,'length_mask':np.arange(padded.shape[1])[None]<lengths[:,None],
                 'interface_meta':np.stack(metas),'interface_mask':np.stack(masks),
                 'label_mask':np.stack(label_masks),'y':np.stack(ys)}
+        if self.physical_config is not None:
+            values.update(phys_loc=np.stack(physical_loc),phys_ctx=np.stack(physical_ctx))
         return InterfaceBatch(**{k:torch.from_numpy(v).to(device) for k,v in values.items()})
 
     def batches(self,size,device='cpu',*,generator=None):

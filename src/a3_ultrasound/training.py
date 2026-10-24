@@ -28,6 +28,7 @@ from a3_ultrasound.models.losses import head_training_loss, validate_complete_tr
 from a3_ultrasound.schema import InterfaceBatch
 from a3_ultrasound.selection import GuardedSelector
 from a3_ultrasound.stream_metrics import PredictionAccumulator
+from a3_ultrasound.prefix_perturbation import training_conditional
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,8 @@ class ModelConfig:
     pre_query_conditioned: bool = False
     local_prior_sigma_samples: float | None = None
     local_prior_strength: float = 1.0
+    physical_features: bool = False
+    pre_exclude_front_end: int | None = None
 
 
 @dataclass(frozen=True)
@@ -74,12 +77,14 @@ class TrainingConfig:
     min_delta: float = 0.002
     normal_fpr_limit: float = 0.01
     outer_evaluation_permitted: bool = False
+    local_aux_mode: str | None = None
+    prefix_replacement_probability: float = 0.0
 
 
 def build_model(config: ModelConfig) -> A3Model:
-    if config.architecture_version not in ("a3-v1.3", "a3-v1.4"):
+    if config.architecture_version not in ("a3-v1.3", "a3-v1.4", "a3-v1.5"):
         raise ValueError("Unknown architecture_version.")
-    if config.architecture_version == "a3-v1.4" and (config.backbone_norm != "group8" or config.query_view != "position2"):
+    if config.architecture_version in ("a3-v1.4", "a3-v1.5") and (config.backbone_norm != "group8" or config.query_view != "position2"):
         raise ValueError("V1.4 requires group8 and position2.")
     if config.head_type not in HEAD_TYPES:
         raise ValueError("Unknown head_type.")
@@ -258,10 +263,14 @@ def evaluate(model: A3Model, data: TensorDataset, *, batch_size: int = 16,
             # for every scalar/row. GPU arithmetic and row order stay unchanged.
             base_probabilities = diagnostic.base_logodds.sigmoid()
             gate_correction = diagnostic.gate * diagnostic.correction if diagnostic.gate is not None else None
+            raw_gate_correction = gate_correction
+            if diagnostic.upstream_flag is not None:
+                gate_correction = gate_correction * diagnostic.upstream_flag
             tensors = (batch.y, batch.label_mask, exact.marginals, exact.map_states,
                        diagnostic.base_logodds, base_probabilities,
                        exact.conditional_probability_range, encoded.local_token_diagnostics.counts,
-                       diagnostic.gate, diagnostic.correction, gate_correction)
+                       diagnostic.gate, diagnostic.correction, gate_correction,
+                       raw_gate_correction, diagnostic.upstream_flag)
             cpu_fields = {id(tensor): tensor.cpu() for tensor in tensors if tensor is not None}
             counts = batch.interface_mask.sum(1).cpu().tolist()
             path_masks = exact.path_mask.cpu()
@@ -298,6 +307,9 @@ def evaluate(model: A3Model, data: TensorDataset, *, batch_size: int = 16,
                     eligible = diagnostic.correction[i, 1:k]
                     row["correction_saturation_fraction"] = (float((eligible.abs() >= 0.95 * model.head.rho).float().mean())
                                                              if eligible.numel() else None)
+                if diagnostic.upstream_flag is not None:
+                    row['upstream_flag'] = values(diagnostic.upstream_flag)
+                    row['gate_times_raw_correction'] = values(raw_gate_correction)
                 rows.append(row)
         metrics=summarize_predictions(rows)
         accumulator=PredictionAccumulator()
@@ -335,6 +347,10 @@ def _code_version() -> dict[str, Any]:
 
 
 def _validate_training_config(config: TrainingConfig) -> None:
+    if config.local_aux_mode not in (None, 'all', 'clean_upstream'):
+        raise ValueError('Unknown local_aux_mode.')
+    if not math.isfinite(config.prefix_replacement_probability) or not 0 <= config.prefix_replacement_probability <= 1:
+        raise ValueError('prefix_replacement_probability must be in [0,1].')
     if config.selection_rule not in ("legacy_deepest", "guarded_joint"):
         raise ValueError("Unknown selection rule.")
     GuardedSelector(config.min_epochs,config.patience,config.min_delta,config.normal_fpr_limit)
@@ -391,7 +407,8 @@ def run_training(model_config: ModelConfig, config: TrainingConfig,
         first_output = model(first_batch, first_batch.y).conditional
         head_training_loss(first_output, first_batch, head_type=model.head_type,
                            lambda_local=config.lambda_local, positive_class_weight=config.positive_class_weight,
-                           disable_local_auxiliary=config.disable_local_auxiliary)
+                           disable_local_auxiliary=config.disable_local_auxiliary,
+                           local_aux_mode=config.local_aux_mode)
     optimizer, parameter_counts = build_optimizer(model, config)
     scheduler = (torch.optim.lr_scheduler.StepLR(optimizer, config.scheduler_step_size, config.scheduler_gamma)
                  if config.scheduler_step_size is not None else None)
@@ -421,13 +438,18 @@ def run_training(model_config: ModelConfig, config: TrainingConfig,
             model.train()
             total = chain_total = local_total = 0.0
             count = 0
-            for batch, indices in datasets["train"].batches(config.batch_size, config.device, generator=generator):
+            perturbation = dict(attempted=0, changed=0, eligible=0)
+            for step, (batch, indices) in enumerate(datasets["train"].batches(config.batch_size, config.device, generator=generator)):
                 validate_complete_training_batch(batch)
                 optimizer.zero_grad(set_to_none=True)
-                output = model(batch, batch.y).conditional
+                output, attempt = training_conditional(model, batch,
+                    probability=config.prefix_replacement_probability, seed=config.seed, epoch=epoch, step=step)
+                for name in perturbation:
+                    perturbation[name] += attempt[name]
                 loss = head_training_loss(output, batch, head_type=model.head_type,
                                           lambda_local=config.lambda_local, positive_class_weight=config.positive_class_weight,
-                                          disable_local_auxiliary=config.disable_local_auxiliary)
+                                          disable_local_auxiliary=config.disable_local_auxiliary,
+                                          local_aux_mode=config.local_aux_mode)
                 if not torch.isfinite(loss.total):
                     raise RuntimeError("Non-finite training loss.")
                 loss.total.backward()
@@ -445,6 +467,8 @@ def run_training(model_config: ModelConfig, config: TrainingConfig,
             record = {"epoch": epoch, "total_loss": total / count, "main_loss": chain_total / count,
                       "local_loss": local_total / count, "learning_rate": optimizer.param_groups[0]["lr"],
                       "validation": validation}
+            if config.prefix_replacement_probability:
+                record['prefix_perturbation'] = perturbation
             if selector:
                 record["selection"] = selector.update(epoch,validation)
                 payload = {"architecture_version":model_config.architecture_version,"epoch":epoch,
@@ -537,7 +561,7 @@ def synthetic_datasets(seed: int, samples_per_split: int = 8) -> dict[str, Tenso
 
 def load_checkpoint(path: Path, *, device: str = "cpu") -> tuple[A3Model, dict[str, Any]]:
     checkpoint = torch.load(path, map_location=device, weights_only=True)
-    if checkpoint.get("architecture_version") not in ("a3-v1.3", "a3-v1.4"):
+    if checkpoint.get("architecture_version") not in ("a3-v1.3", "a3-v1.4", "a3-v1.5"):
         raise ValueError("Expected a V1.3 checkpoint from the common runner.")
     model = build_model(ModelConfig(**checkpoint["resolved_config"]["model"])).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])

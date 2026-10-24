@@ -30,11 +30,15 @@ class PredictionAccumulator:
         self.multi_n=self.multi_raw_n=self.multi_missed=self.multi_missed_raw=0
         self.multi_joint_wrong=self.multi_joint_wrong_raw=0
         self.shadow_positive_n=self.shadow_positive_raw_n=self.shadow_recalled=self.shadow_recalled_raw=0
+        self.false_upper_positive_n=self.false_upper_positive_raw_n=0
+        self.false_upper_missed=self.false_upper_missed_raw=0
+        self.false_upper_suppressed=self.false_upper_suppressed_raw=0
         self.evaluated_n=0;self.weighted=False
         self.positive_n=self.positive_correct=self.normal_n=self.normal_fp=0
         self.raw_positive_n=self.raw_positive_correct=self.raw_normal_n=self.raw_normal_fp=0
         self.c_values=[];self.gc_values=[];self.c_weights=[];self.c_saturated=[]
         self.direction={key:[0,0,0,0] for key in ('upper_correct','upper_wrong')}
+        self.effective_direction={key:[0,0,0,0] for key in ('upper_correct','upper_wrong')}
     def add(self,row):
         weight=row.get('sample_weight',1)
         if type(weight) is not int or weight<1:raise ValueError('Positive integer inverse-probability weight required.')
@@ -43,6 +47,16 @@ class PredictionAccumulator:
         y,m,p=row['y'],row['label_mask'],row['marginals']
         self.has_rho|=row['rho'] is not None
         if y is None:return
+        for k in range(1,len(y)):
+            if (m[k] and y[k]==1 and all(m[j] and y[j]==0 for j in range(k))
+                    and any(row['map_states'][j]==1 for j in range(k))):
+                self.false_upper_positive_n+=weight;self.false_upper_positive_raw_n+=1
+                missed=row['map_states'][k]==0
+                self.false_upper_missed+=weight*missed;self.false_upper_missed_raw+=int(missed)
+                gc=row.get('gate_times_correction')
+                suppressed=(gc is not None and row['base_logodds'][k]>=0
+                            and row['base_logodds'][k]+gc[k]<0)
+                self.false_upper_suppressed+=weight*suppressed;self.false_upper_suppressed_raw+=int(suppressed)
         # A known abnormal upstream truth is sufficient; unknown labels are never filled with zero.
         for k in range(1,len(y)):
             if m[k] and y[k]==1 and any(m[j] and y[j]==1 for j in range(k)):
@@ -61,6 +75,10 @@ class PredictionAccumulator:
                     correct=(c>0 and y[k]==1) or (c<0 and y[k]==0)
                     counts=self.direction[key]
                     counts[0]+=weight;counts[1]+=weight*correct;counts[2]+=1;counts[3]+=correct
+                    if row.get('upstream_flag') is not None and row['upstream_flag'][k] and gc != 0:
+                        effective_correct=(gc>0 and y[k]==1) or (gc<0 and y[k]==0)
+                        active=self.effective_direction[key]
+                        active[0]+=weight;active[1]+=weight*effective_correct;active[2]+=1;active[3]+=effective_correct
         for k,known in enumerate(m):
             if not known:continue
             self.interfaces[str(k+1)].add(y[k],p[k],weight);self.labeled+=weight
@@ -117,6 +135,13 @@ class PredictionAccumulator:
             'multiple_defect_joint_error_rate':self.multi_joint_wrong/self.multi_n if self.multi_n else None,
             'single_defect_to_multiple_rate':self.single_to_multi/self.single_n if self.single_n else None,
             'downstream_abnormal_recall_given_upstream_abnormal':self.shadow_recalled/self.shadow_positive_n if self.shadow_positive_n else None,
+            'false_positive_upstream_diagnostic':{
+                'definition':'all upstream truths known normal, any upstream joint MAP abnormal, current truth abnormal',
+                'weighted_denominator':self.false_upper_positive_n,'raw_denominator':self.false_upper_positive_raw_n,
+                'weighted_joint_MAP_missed':self.false_upper_missed,'raw_joint_MAP_missed':self.false_upper_missed_raw,
+                'weighted_conditional_harmful_suppression':self.false_upper_suppressed,
+                'raw_conditional_harmful_suppression':self.false_upper_suppressed_raw,
+                'conditional_scope':'fixed inferred MAP prefix; base>=0 and base+effective correction<0; not re-enumeration ablation'},
             'defect_diagnostics':{
                 'multiple_missing_any':{'weighted_numerator':self.multi_missed,'weighted_denominator':self.multi_n,
                     'raw_numerator':self.multi_missed_raw,'raw_denominator':self.multi_raw_n},
@@ -136,6 +161,11 @@ class PredictionAccumulator:
             'correction_quantiles':quantiles(self.c_values),
             'gate_times_correction_quantiles':quantiles(self.gc_values),
             'correction_quantile_scope':'exact raw evaluated reliable non-first MAP-path interfaces; numpy linear quantiles',
+            'correction_direction_scope':'raw c sign, includes inactive u=0; not effective correction benefit',
+            'active_effective_direction':{key:{'weighted_count':v[0],'weighted_correct':v[1],
+                'raw_count':v[2],'raw_correct':v[3],'accuracy':v[1]/v[0] if v[0] else None}
+                for key,v in self.effective_direction.items()},
+            'active_effective_direction_scope':'V1.5 upstream_flag=1 and nonzero g*c*u, current and all upstream labels known; direction only, not decision flip',
             'correction_direction':{key:{'weighted_count':v[0],'weighted_correct':v[1],
                 'raw_count':v[2],'raw_correct':v[3],'accuracy':v[1]/v[0] if v[0] else None,
                 'raw_accuracy':v[3]/v[2] if v[2] else None} for key,v in self.direction.items()}}

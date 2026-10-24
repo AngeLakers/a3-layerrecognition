@@ -25,6 +25,10 @@ def validate_freeze_config(cfg, *, fold_name, seed, head, require_permission=Tru
             or cfg.get('automatic_screening') is not False
             or cfg.get('normal_to_positive') != 3 or cfg.get('label_version') != 'V2'
             or cfg.get('evaluation_batch_size') != 128 or not cfg.get('save_epoch_checkpoints')
+            or t.get('prefix_replacement_probability', 0.) != 0.
+            or t.get('local_aux_mode') not in (None, 'all')
+            or m.get('physical_features',False) or m.get('pre_exclude_front_end') is not None
+            or cfg.get('input_tail_policy') is not None
             or not cfg.get('save_best_correction_npz')
             or m.get('architecture_version') != 'a3-v1.4' or m.get('backbone') != 'resnet1d'
             or m.get('backbone_norm') != 'group8' or m.get('query_view') != 'position2' or m.get('rho') != 3.

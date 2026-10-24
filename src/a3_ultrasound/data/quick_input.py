@@ -45,7 +45,9 @@ def transform_trace(trace: np.ndarray, row: dict, config: dict) -> tuple[np.ndar
     deviation = np.abs(trace.astype(float)-baseline)
     active = stop < len(trace) and bool(np.any(deviation[max(0,stop-check):stop] > threshold))
     policy=tail.get('policy','active_boundary_first_quiet')
-    if policy=='last_active_tail':
+    if policy=='nominal_fixed':
+        pass
+    elif policy=='last_active_tail':
         # A quiet gap at the nominal cutoff cannot establish that later packets
         # are absent. Scan the entire remainder before discarding any tail.
         later=np.flatnonzero(deviation[stop:] > threshold)

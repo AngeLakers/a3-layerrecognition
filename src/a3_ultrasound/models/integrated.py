@@ -34,8 +34,8 @@ from a3_ultrasound.models.responsibility_tokens import (
 from a3_ultrasound.schema import InterfaceBatch
 
 
-HeadType = Literal["local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux"]
-HEAD_TYPES = ("local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux")
+HeadType = Literal["local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux", "proposed_v15"]
+HEAD_TYPES = ("local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux", "proposed_v15")
 
 
 @dataclass(frozen=True)
@@ -89,6 +89,8 @@ class A3PCCModel(nn.Module):
         local_prior_sigma_samples: float | None = None,
         local_prior_strength: float = 1.0,
         query_view: str = "position2",
+        physical_features: bool = False,
+        pre_exclude_front_end: int | None = None,
     ) -> None:
         super().__init__()
         if any(
@@ -118,6 +120,8 @@ class A3PCCModel(nn.Module):
         if readout_scope == "full_waveform" and head_type != "local_independent":
             raise ValueError("full_waveform ablation is restricted to local_independent.")
         self.head_type = head_type
+        self.physical_features = physical_features
+        self.pre_exclude_front_end = pre_exclude_front_end
         self.readout_scope = readout_scope
         self.pre_query_conditioned = pre_query_conditioned
         self.local_prior_sigma_samples = local_prior_sigma_samples
@@ -145,24 +149,27 @@ class A3PCCModel(nn.Module):
             query_dim=query_dim,
             token_dim=token_dim,
         )
-        common = dict(local_dim=token_dim, local_base_type=local_base_type,
+        local_dim = token_dim + int(physical_features)
+        context_dim = token_dim + 3*int(physical_features)
+        gate_dim = token_dim + 4*int(physical_features)
+        common = dict(local_dim=local_dim, local_base_type=local_base_type,
                       local_base_hidden_dim=local_base_hidden_dim)
         # Retain the 'pcc' module key for compatibility with historical state_dicts.
         if head_type == "local_independent":
             self.pcc = IndependentConditionalStep(
-                token_dim, hidden_dim=local_base_hidden_dim, local_base_type=local_base_type)
+                local_dim, hidden_dim=local_base_hidden_dim, local_base_type=local_base_type)
         elif head_type == "local_pre_independent":
             self.pcc = LocalPreIndependentStep(
-                **common, context_dim=token_dim, hidden_dim=pcc_hidden_dim)
+                **common, context_dim=context_dim, hidden_dim=pcc_hidden_dim)
         elif head_type == "vanilla_chain":
             self.pcc = VanillaClassifierChainStep(
-                **common, context_dim=token_dim, query_dim=query_dim,
+                **common, context_dim=context_dim, query_dim=query_dim,
                 prefix_dim=prefix_dim, hidden_dim=pcc_hidden_dim, max_interfaces=max_interfaces)
         else:
             self.pcc = PCCConditionalStep(
-                local_dim=token_dim,
-                context_dim=token_dim,
-                gate_dim=token_dim,
+                local_dim=local_dim,
+                context_dim=context_dim,
+                gate_dim=gate_dim,
                 query_dim=query_dim,
                 prefix_dim=prefix_dim,
                 hidden_dim=pcc_hidden_dim,
@@ -170,6 +177,7 @@ class A3PCCModel(nn.Module):
                 rho=rho,
                 local_base_type=local_base_type,
                 local_base_hidden_dim=local_base_hidden_dim,
+                correction_mode="suppress_only" if head_type == "proposed_v15" else "bidirectional",
             )
 
     def forward(
@@ -201,6 +209,7 @@ class A3PCCModel(nn.Module):
             batch.interface_mask,
             prior_center=nominal_tof,
             prior_sigma_samples=self.local_prior_sigma_samples,
+            pre_exclude_front_end=self.pre_exclude_front_end,
         )
         local_token_diagnostics = summarize_local_tokens(
             local_support,
@@ -231,6 +240,14 @@ class A3PCCModel(nn.Module):
             query,
             batch.interface_mask,
         )
+        if self.physical_features:
+            if batch.phys_loc is None or batch.phys_ctx is None:
+                raise ValueError("This model requires training-normalized physical features.")
+            tokens = type(tokens)(
+                r_loc=torch.cat((tokens.r_loc,batch.phys_loc),dim=-1),
+                r_ctx=torch.cat((tokens.r_ctx,batch.phys_ctx),dim=-1),
+                r_gate=torch.cat((tokens.r_gate,batch.phys_loc,batch.phys_ctx),dim=-1),
+            )
         return EncodedInterfaces(
             interface_mask=batch.interface_mask,
             backbone=backbone_output,

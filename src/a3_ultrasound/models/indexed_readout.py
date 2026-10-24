@@ -80,6 +80,7 @@ def build_indexed_supports(
     *,
     prior_center: Tensor | None = None,
     prior_sigma_samples: float | None = None,
+    pre_exclude_front_end: int | None = None,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Build Local/Pre masks and a normalized Gaussian local prior.
 
@@ -118,6 +119,10 @@ def build_indexed_supports(
     valid_interface = interface_mask.unsqueeze(-1)
     local_mask = (centers >= starts) & (centers <= ends) & valid_feature & valid_interface
     pre_mask = (centers < starts) & valid_feature & valid_interface
+    if pre_exclude_front_end is not None:
+        if type(pre_exclude_front_end) is not int or pre_exclude_front_end < 0:
+            raise ValueError("Front exclusion must be a nonnegative integer endpoint.")
+        pre_mask = pre_mask & (centers > pre_exclude_front_end)
 
     if prior_sigma_samples is not None:
         if not math.isfinite(prior_sigma_samples) or prior_sigma_samples <= 0:

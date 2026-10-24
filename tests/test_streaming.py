@@ -26,6 +26,19 @@ def test_stream_counts_equal_dense_metrics_with_partial_labels():
         assert got['deepest_per_specimen'][entity]['brier']==pytest.approx(expected['deepest_per_specimen'][entity]['brier'])
 
 
+def test_v15_physical_batch_uses_training_stats_and_fixed_tail_without_catalog_change(toy_catalog):
+    stats=dict(front_end_samples=180,epsilon=1e-8,mean=1.,std=2.)
+    data=RFShardDataset(toy_catalog,['AL'],training=True,physical_config=stats,tail_policy='nominal_fixed')
+    assert data.config['tail']['policy']=='nominal_fixed'
+    assert data.catalog['input_config']['tail']['policy']!='nominal_fixed'
+    batch=data.make_batch([0,1])
+    assert batch.x_raw.shape[1]==670
+    assert torch.equal(batch.phys_loc[:,:2,0],torch.full((2,2),-.5))
+    assert torch.equal(batch.phys_ctx[:,0],torch.tensor([[0.,0.,1.],[0.,0.,1.]]))
+    assert torch.equal(batch.phys_ctx[:,1],torch.tensor([[-.5,-.5,0.],[-.5,-.5,0.]]))
+    assert not batch.phys_loc[:,2:].any() and not batch.phys_ctx[:,2:].any()
+
+
 @pytest.fixture
 def toy_catalog(tmp_path):
     config=json.loads((Path(__file__).parents[1]/'configs/experiment/a3_13board_local_ready_v3.json').read_text(encoding='utf-8'))

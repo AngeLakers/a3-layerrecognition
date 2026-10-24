@@ -147,11 +147,16 @@ def validate_complete_training_batch(batch: InterfaceBatch) -> None:
 def head_training_loss(output: HeadStepOutput, batch: InterfaceBatch, *, head_type: str,
                        lambda_local: float = 0.3,
                        positive_class_weight: float | Tensor | None = None,
-                       disable_local_auxiliary: bool = False) -> PCCLossOutput:
+                       disable_local_auxiliary: bool = False,
+                       local_aux_mode: str | None = None) -> PCCLossOutput:
     """Dispatch the main loss; lambda=0 is an explicitly named ablation only."""
     validate_complete_training_batch(batch)
-    if head_type not in ("local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux"):
+    if head_type not in ("local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux", "proposed_v15"):
         raise ValueError("Unknown head_type for training loss.")
+    if local_aux_mode not in (None, "all", "clean_upstream"):
+        raise ValueError("local_aux_mode must be all or clean_upstream.")
+    clean_upstream = (head_type == "proposed_shadow_aux" if local_aux_mode is None
+                      else local_aux_mode == "clean_upstream")
     if disable_local_auxiliary:
         if lambda_local != 0 or head_type == "local_independent":
             raise ValueError("The no-local-auxiliary ablation requires lambda_local=0 and an auxiliary Head.")
@@ -160,7 +165,7 @@ def head_training_loss(output: HeadStepOutput, batch: InterfaceBatch, *, head_ty
     effective_lambda = 0.0 if head_type == "local_independent" else lambda_local
     return pcc_training_loss(output.logits, output.base_logodds, batch.y, batch.interface_mask,
                              label_mask=batch.label_mask, positive_class_weight=positive_class_weight,
-                             lambda_local=effective_lambda, shadow_auxiliary=head_type == "proposed_shadow_aux")
+                             lambda_local=effective_lambda, shadow_auxiliary=clean_upstream)
 
 
 __all__ = ["PCCLossOutput", "pcc_training_loss", "head_training_loss", "validate_complete_training_batch"]

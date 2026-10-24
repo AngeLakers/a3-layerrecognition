@@ -20,6 +20,7 @@ class HeadStepOutput:
     correction: Tensor | None = None
     gate: Tensor | None = None
     prefix_hidden: Tensor | None = None
+    upstream_flag: Tensor | None = None
 
 
 # Keep the historical constructor/output name for existing PCC callers.
@@ -141,6 +142,7 @@ class PCCConditionalStep(nn.Module):
         rho: float = 1.0,
         local_base_type: LocalBaseType = "mlp",
         local_base_hidden_dim: int = 32,
+        correction_mode: Literal["bidirectional", "suppress_only"] = "bidirectional",
     ) -> None:
         super().__init__()
         if (
@@ -158,6 +160,9 @@ class PCCConditionalStep(nn.Module):
                 "rho must be finite and > 0 so it remains a positive correction bound."
             )
         self.rho = resolved_rho
+        if correction_mode not in ("bidirectional", "suppress_only"):
+            raise ValueError("Unknown correction_mode.")
+        self.correction_mode = correction_mode
         self.max_interfaces = max_interfaces
         self.query_dim = int(query_dim)
         self.prefix_dim = int(prefix_dim)
@@ -185,6 +190,8 @@ class PCCConditionalStep(nn.Module):
         assert isinstance(final_correction, nn.Linear)
         nn.init.zeros_(final_correction.weight)
         nn.init.zeros_(final_correction.bias)
+        if correction_mode == "suppress_only":
+            nn.init.constant_(final_correction.bias, -3.0)
 
     def prefix_history(
         self,
@@ -223,13 +230,19 @@ class PCCConditionalStep(nn.Module):
 
         prefix_hidden = self.prefix_history(query, prefix_states, interface_mask)
         base_logodds = self.base(r_loc)
-        correction = self.rho * torch.tanh(
-            self.correction(torch.cat((r_ctx, prefix_hidden), dim=-1)).squeeze(-1)
-        )
+        raw_correction = self.correction(torch.cat((r_ctx, prefix_hidden), dim=-1)).squeeze(-1)
+        correction = (self.rho * torch.tanh(raw_correction)
+                      if self.correction_mode == "bidirectional"
+                      else -self.rho * torch.sigmoid(raw_correction))
         gate = torch.sigmoid(self.gate(r_gate).squeeze(-1))
         has_prefix = interface_mask.cumsum(dim=1) > 1
         correction = torch.where(has_prefix, correction, torch.zeros_like(correction))
-        logits = base_logodds + gate * correction
+        positive = ((prefix_states == 1) & interface_mask).long()
+        upstream_flag = ((positive.cumsum(1) - positive) > 0) & interface_mask
+        effective_correction = correction
+        if self.correction_mode == "suppress_only":
+            effective_correction = correction * upstream_flag.to(correction.dtype)
+        logits = base_logodds + gate * effective_correction
         valid = interface_mask.to(dtype=logits.dtype)
         return PCCStepOutput(
             logits=logits * valid,
@@ -237,6 +250,7 @@ class PCCConditionalStep(nn.Module):
             correction=correction * valid,
             gate=gate * valid,
             prefix_hidden=prefix_hidden * valid.unsqueeze(-1),
+            upstream_flag=upstream_flag if self.correction_mode == "suppress_only" else None,
         )
 
 

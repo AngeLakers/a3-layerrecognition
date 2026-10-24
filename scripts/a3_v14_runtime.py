@@ -38,18 +38,21 @@ def verify(root):
         if m.get('candidate_only') or not m.get('development_training_permitted'):
             raise RecoveryRequired('D2 candidate is closed pending protocol review.')
         validate_config(read(root/'d2_config.json'))
-    if m.get('protocol')=='V1.4-freeze':
+    if m.get('protocol') in ('V1.4-freeze','V1.5-freeze'):
         from a3_ultrasound.freeze_protocol import validate_freeze_config,commit_identity,HEADS
+        if m['protocol']=='V1.5-freeze':
+            from a3_ultrasound.v15_protocol import validate_config as validate_freeze_config,HEADS,load_physical_artifacts
         from a3_ultrasound.training import _code_version
         cfg=read(root/'freeze_config.json')
         if not m.get('freeze_training_permitted'):
             raise RecoveryRequired('Waiting for the user to explicitly restart frozen training.')
         if set(m['jobs'])!={f'F1_{h}_s23' for h in HEADS}:
-            raise RecoveryRequired('Freeze manifest must contain exactly the three approved runs.')
+            raise RecoveryRequired('Freeze manifest differs from the approved Head set.')
         for head in HEADS:
             if m['jobs'][f'F1_{head}_s23']['head']!=head:raise RecoveryRequired('Freeze job-to-Head mapping differs.')
             validate_freeze_config(cfg,fold_name='F1',seed=23,head=head)
         commit_identity(cfg,_code_version())
+        if m['protocol']=='V1.5-freeze':load_physical_artifacts(cfg)
     return m
 
 
@@ -71,7 +74,7 @@ def child(root,job):
             if job!='d2':raise RecoveryRequired('D2 only accepts its registered pair job.')
             from a3_ultrasound.d2_diagnostic import main
             main(root/'d2_config.json',out)
-        elif m.get('protocol')=='V1.4-freeze':
+        elif m.get('protocol') in ('V1.4-freeze','V1.5-freeze'):
             from a3_ultrasound.stream_training import train
             train(root/'freeze_config.json',out,fold_name='F1',seed=23,head=m['jobs'][job]['head'])
         elif job=='stage1':
@@ -114,7 +117,7 @@ def supervise(root,job):
                 while proc.poll() is None:
                     reason=guard_reason(idle_seconds=activity_age(out,started),elapsed_seconds=time.time()-started,
                         free_bytes=shutil.disk_usage(root).free,stop_requested=(root/'STOP').exists(),idle_limit=1200,
-                        wall_limit=(24 if m.get('protocol')=='V1.4-freeze' else 8)*3600)
+                        wall_limit=(24 if m.get('protocol') in ('V1.4-freeze','V1.5-freeze') else 8)*3600)
                     if reason:
                         terminate_owned(saved);raise RecoveryRequired(reason)
                     atomic_json(session/'heartbeat.json',dict(epoch=time.time(),elapsed=time.time()-started,status='RUNNING',job=job))

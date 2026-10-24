@@ -1,6 +1,7 @@
 """Sharded train/validation runner with separately invoked outer evaluation."""
 from __future__ import annotations
 from dataclasses import asdict
+from collections import defaultdict
 import hashlib,json,random,time
 from pathlib import Path
 import numpy as np
@@ -8,11 +9,13 @@ import torch
 from a3_ultrasound.data.streaming import RFShardDataset
 from a3_ultrasound.training import ModelConfig,TrainingConfig,TensorDataset,build_model,build_optimizer,evaluate,_validate_training_config,_code_version
 from a3_ultrasound.models.losses import head_training_loss
+from a3_ultrasound.prefix_perturbation import training_conditional
 from a3_ultrasound.stream_metrics import PredictionAccumulator
 from a3_ultrasound.selection import GuardedSelector
 from a3_ultrasound.data.epoch_sampling import use_epoch
 from a3_ultrasound.validation_diagnostics import CorrectionArchive
 from a3_ultrasound.freeze_protocol import PROTOCOL as FREEZE_PROTOCOL,validate_freeze_config,verify_panels,commit_identity
+from a3_ultrasound.v15_protocol import PROTOCOL as V15_PROTOCOL,validate_config as validate_v15_config,load_physical_artifacts,copy_runtime_artifacts
 
 
 def save(path,data):path.write_text(json.dumps(data,ensure_ascii=False,indent=2,allow_nan=False)+'\n',encoding='utf-8')
@@ -34,6 +37,8 @@ def catalog_signature(catalog):
 
 def evaluate_stream(model,data,*,batch_size,device,prediction_path=None,progress_path=None,phase='evaluation',epoch=None,correction_archive=None):
     primary=PredictionAccumulator();nominal=PredictionAccumulator();quality=PredictionAccumulator()
+    per_specimen=defaultdict(PredictionAccumulator);per_material=defaultdict(PredictionAccumulator)
+    materials={s['entity']:('AL' if s['group']=='AL' else 'TC4') for s in data.shards}
     handle=prediction_path.open('w',encoding='utf-8') if prediction_path else None
     try:
         seen=0
@@ -43,6 +48,8 @@ def evaluate_stream(model,data,*,batch_size,device,prediction_path=None,progress
             _,rows=evaluate(model,small,batch_size=len(indices),device=device)
             for row,annotation in zip(rows,data.annotations(indices)):
                 row.update(annotation);primary.add(row)
+                per_specimen[row['specimen_id']].add(row)
+                per_material[materials[row['specimen_id']]].add(row)
                 if correction_archive is not None:correction_archive.add(row)
                 nominal.add(dict(row,y=row['nominal_y'],label_mask=row['nominal_label_mask']))
                 if row['quality_flagged']:quality.add(row)
@@ -52,7 +59,9 @@ def evaluate_stream(model,data,*,batch_size,device,prediction_path=None,progress
                 progress(progress_path,phase=phase,epoch=epoch,records=seen,total_records=len(data))
     finally:
         if handle:handle.close()
-    return {'reliable':primary.result(),'nominal_secondary':nominal.result(),'quality_flagged':quality.result()}
+    return {'reliable':primary.result(),'nominal_secondary':nominal.result(),'quality_flagged':quality.result(),
+            'per_specimen':{k:v.result() for k,v in per_specimen.items()},
+            'per_material':{k:v.result() for k,v in per_material.items()}}
 
 
 def validate_fold(fold,catalog):
@@ -65,12 +74,13 @@ def validate_fold(fold,catalog):
 
 def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
     cfg=json.loads(Path(config_path).read_text(encoding='utf-8'))
-    frozen=cfg.get('protocol')==FREEZE_PROTOCOL
+    v15=cfg.get('protocol')==V15_PROTOCOL
+    frozen=cfg.get('protocol') in (FREEZE_PROTOCOL,V15_PROTOCOL)
     code_version=_code_version()
     config_sha256=hashlib.sha256(Path(config_path).read_bytes()).hexdigest()
     if frozen:
         if diagnostic:raise ValueError('Frozen real runs cannot use a train-only diagnostic override.')
-        validate_freeze_config(cfg,fold_name=fold_name,seed=seed,head=head)
+        (validate_v15_config if v15 else validate_freeze_config)(cfg,fold_name=fold_name,seed=seed,head=head)
         commit_identity(cfg,code_version)
     catalog_path=Path(cfg['catalog']);catalog=json.loads(catalog_path.read_text(encoding='utf-8'))
     fold=next(f for f in cfg['folds'] if f['fold']==fold_name);validate_fold(fold,catalog)
@@ -103,19 +113,24 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
         raise ValueError('evaluation_batch_size must be a positive integer.')
     if tc.device=='cuda' and not torch.cuda.is_available():raise RuntimeError('CUDA unavailable; no silent fallback.')
     model_config=ModelConfig(**dict(cfg['model'],head_type=head))
+    physical, m6 = load_physical_artifacts(cfg) if v15 else (None,None)
+    if model_config.physical_features and not v15:
+        raise ValueError('Physical stream training requires the V1.5 normalization contract.')
     if frozen:verify_panels(cfg,catalog_signature(catalog))
     random.seed(seed);np.random.seed(seed);torch.manual_seed(seed);torch.set_num_threads(2)
     if torch.cuda.is_available():torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.benchmark=False;torch.backends.cudnn.deterministic=True
     training=RFShardDataset(catalog_path,fold['train'],training=True,seed=seed,
         normal_ratio=cfg['normal_to_positive'],
-        diagnostic_per_class=cfg['diagnostic']['per_entity_per_class'] if diagnostic else None)
+        diagnostic_per_class=cfg['diagnostic']['per_entity_per_class'] if diagnostic else None,
+        physical_config=physical,tail_policy=cfg.get('input_tail_policy'))
     if not diagnostic and not cfg.get('epoch_selection_root'):
         selection=Path(cfg['frozen_selection_root'])/f'{fold_name}_s{seed}.npy'
         if not np.array_equal(training.refs,np.load(selection,allow_pickle=False)):
             raise ValueError('Training selection differs from frozen specimen/seed indices.')
     # Diagnostic never opens outer validation or test RF. Formal uses validation only.
-    validation=None if diagnostic else RFShardDataset(catalog_path,fold['validation'])
+    validation=None if diagnostic else RFShardDataset(catalog_path,fold['validation'],
+        physical_config=physical,tail_policy=cfg.get('input_tail_policy'))
     validation_sampling=None
     if validation is not None and cfg.get('validation_selection_root'):
         selection_root=Path(cfg['validation_selection_root'])
@@ -134,7 +149,7 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
     model=build_model(model_config).to(tc.device);optimizer,counts=build_optimizer(model,tc)
     output=Path(output);output.mkdir(parents=True,exist_ok=False);started=time.perf_counter()
     np.save(output/'training_selection.npy',training.refs)
-    resolved={'model':asdict(model_config),'training':asdict(tc),'fold':fold,'input_config':catalog['input_config'],
+    resolved={'model':asdict(model_config),'training':asdict(tc),'fold':fold,'input_config':training.config,
         'catalog':str(catalog_path),'catalog_signature':catalog_signature(catalog),
         'selection_entities':training.entities,'selection_counts':training.selection_summary(),
         'diagnostic':diagnostic,'test_opened':False,'parameter_counts':counts,
@@ -151,6 +166,11 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
     resolved['epoch_selection_root']=cfg.get('epoch_selection_root')
     resolved['training_selection_file_scope']='epoch1 only; per-epoch refs/order in epoch_selection_root' if cfg.get('epoch_selection_root') else 'fixed cohort'
     resolved['development_stage']=cfg.get('development_stage')
+    if v15:
+        resolved.update(physical_normalization=physical,m6_decision=m6,
+            physical_statistics_sha256=cfg['physical_statistics_sha256'],m6_decision_sha256=cfg['m6_decision_sha256'],
+            physical_interpretation='Engineering energy ratio; front and first Local overlap on 3mm plates; not calibrated reflectivity or causal isolation.')
+        copy_runtime_artifacts(cfg,output)
     resolved.update(code_version=code_version,commit_hash=code_version.get('commit'),config_sha256=config_sha256,
                     protocol=cfg.get('protocol'),automatic_screening=False if frozen else development,old_weights_reused=False)
     if development:
@@ -168,11 +188,18 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
             if cfg.get('epoch_selection_root'):
                 epoch_sha=use_epoch(training,cfg['epoch_selection_root'],epoch,seed=seed,catalog_signature=catalog_signature(catalog))
             model.train();total=0.;seen=0
+            perturbation=dict(attempted=0,changed=0,eligible=0)
+            perturbation_hash=hashlib.sha256()
             progress(output/'progress.json',phase='training',epoch=epoch,records=0,total_records=len(training),updates_total=updates)
-            for batch,ids in training.batches(tc.batch_size,tc.device,generator=None if cfg.get('epoch_selection_root') else generator):
-                optimizer.zero_grad(set_to_none=True);out=model(batch,batch.y)
-                loss=head_training_loss(out.conditional,batch,head_type=head,lambda_local=tc.lambda_local,
-                    positive_class_weight=tc.positive_class_weight,disable_local_auxiliary=tc.disable_local_auxiliary)
+            for step,(batch,ids) in enumerate(training.batches(tc.batch_size,tc.device,generator=None if cfg.get('epoch_selection_root') else generator)):
+                optimizer.zero_grad(set_to_none=True)
+                out,attempt=training_conditional(model,batch,probability=tc.prefix_replacement_probability,
+                    seed=seed,epoch=epoch,step=step)
+                for name in perturbation:perturbation[name]+=attempt[name]
+                if attempt['attempt_mask_sha256']:perturbation_hash.update(attempt['attempt_mask_sha256'].encode('ascii'))
+                loss=head_training_loss(out,batch,head_type=head,lambda_local=tc.lambda_local,
+                    positive_class_weight=tc.positive_class_weight,disable_local_auxiliary=tc.disable_local_auxiliary,
+                    local_aux_mode=tc.local_aux_mode)
                 if not torch.isfinite(loss.total):raise RuntimeError('Nonfinite loss.')
                 loss.total.backward()
                 if any(p.grad is not None and not torch.isfinite(p.grad).all() for p in model.parameters()):raise RuntimeError('Nonfinite gradient.')
@@ -180,8 +207,10 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
                 if updates%100==0 or seen==len(training):
                     progress(output/'progress.json',phase='training',epoch=epoch,records=seen,total_records=len(training),updates_total=updates)
             record={'epoch':epoch,'train_loss':total/seen,'records':seen,'updates_total':updates}
+            if tc.prefix_replacement_probability:
+                record['prefix_perturbation']=dict(perturbation,attempt_sequence_sha256=perturbation_hash.hexdigest())
             if validation is not None:
-                correction_archive=CorrectionArchive() if head=='proposed' and cfg.get('save_best_correction_npz') else None
+                correction_archive=CorrectionArchive() if head in ('proposed','proposed_v15') and cfg.get('save_best_correction_npz') else None
                 progress(output/'progress.json',phase='validation',epoch=epoch,records=0,total_records=len(validation))
                 metrics=evaluate_stream(model,validation,batch_size=evaluation_batch_size,device=tc.device,
                     progress_path=output/'progress.json',phase='validation',epoch=epoch,correction_archive=correction_archive)
@@ -267,7 +296,7 @@ def stage2_alarms(epoch,score):
 
 def test_checkpoint(config_path,checkpoint_path,output):
     cfg=json.loads(Path(config_path).read_text(encoding='utf-8'))
-    if cfg.get('protocol')==FREEZE_PROTOCOL:raise ValueError('Outer evaluation is closed for v1.4-freeze.')
+    if cfg.get('protocol') in (FREEZE_PROTOCOL,V15_PROTOCOL):raise ValueError('Outer evaluation is closed for frozen development runs.')
     if not cfg.get('outer_evaluation_permitted',False):raise ValueError('Outer evaluation remains closed.')
     c=torch.load(checkpoint_path,map_location=cfg['training']['device'],weights_only=True);resolved=c['resolved_config']
     if resolved.get('development_stage') is not None:

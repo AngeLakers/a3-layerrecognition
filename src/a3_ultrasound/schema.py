@@ -43,6 +43,8 @@ class InterfaceBatch:
     interface_mask: Tensor
     label_mask: Tensor | None = None
     y: Tensor | None = None
+    phys_loc: Tensor | None = None
+    phys_ctx: Tensor | None = None
 
     def __post_init__(self) -> None:
         if self.x_raw.ndim != 2:
@@ -72,6 +74,14 @@ class InterfaceBatch:
         if self.y is not None:
             if self.y.shape != self.interface_mask.shape or self.y.dtype != torch.int64:
                 raise ValueError("y must be int64 with shape [B, Kmax].")
+        if (self.phys_loc is None) != (self.phys_ctx is None):
+            raise ValueError("Physical local and context tensors must be supplied together.")
+        for value, width in ((self.phys_loc, 1), (self.phys_ctx, 3)):
+            if value is not None:
+                if (value.shape != (*self.interface_mask.shape, width)
+                        or value.dtype != torch.float32 or not torch.isfinite(value).all()
+                        or torch.any(value[~self.interface_mask] != 0)):
+                    raise ValueError("Physical features must be finite float32 with masked padding zero.")
 
     @property
     def valid_interface_counts(self) -> Tensor:

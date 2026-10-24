@@ -28,6 +28,11 @@ class CorrectionArchive:
                 current_truth=int(y[k]) if y is not None and mask[k] else -1,
                 map_state=int(row['map_states'][k]), upstream_truth=upstream,
                 upstream_any_abnormal=group))
+            if row.get('upstream_flag') is not None:
+                self.rows[-1].update(upstream_flag=int(row['upstream_flag'][k]),
+                    raw_gc=row['gate_times_raw_correction'][k],
+                    b=row['base_logodds'][k], eta=row['base_logodds'][k]+row['gate_times_correction'][k],
+                    upstream_map=row['map_states'][:k])
 
     def save(self, path, *, epoch, checkpoint, commit_hash, config_sha256):
         """Replace only the NPZ paired with the named checkpoint's same epoch update."""
@@ -48,6 +53,18 @@ class CorrectionArchive:
             arrays[key] = np.asarray([r[key] for r in rows], dtype=np.float64)
             if not np.isfinite(arrays[key]).all():
                 raise ValueError('Nonfinite raw correction values.')
+        if rows and 'upstream_flag' in rows[0]:
+            if not all('upstream_flag' in r for r in rows):
+                raise ValueError('Mixed correction contracts in one archive.')
+            arrays['effective_gc'] = arrays['gc'].copy()
+            arrays['gc'] = np.asarray([r['raw_gc'] for r in rows], dtype=np.float64)
+            arrays['upstream_flag'] = np.asarray([r['upstream_flag'] for r in rows], dtype=np.int8)
+            for key in ('b', 'eta'):
+                arrays[key] = np.asarray([r[key] for r in rows], dtype=np.float64)
+            maps = np.full((len(rows), width), -1, dtype=np.int8)
+            for i,r in enumerate(rows):maps[i,:r['interface_index']]=r['upstream_map']
+            arrays['upstream_map'] = maps
+            arrays['correction_contract'] = np.asarray('gc=g*c; effective_gc=g*c*upstream_flag; eta=b+effective_gc')
         arrays.update(upstream_truth=upstream, upstream_interface_mask=upstream_mask,
             upstream_label_mask=upstream_mask & (upstream >= 0),
             metadata_json=np.asarray(json.dumps(dict(epoch=epoch, checkpoint=checkpoint,
