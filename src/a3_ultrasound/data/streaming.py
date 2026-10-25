@@ -15,13 +15,36 @@ class RFShardDataset:
 
     def __init__(self, catalog_path, entities, *, training=False, seed=23,
                  normal_ratio=3, diagnostic_per_class=None, physical_config=None,
-                 tail_policy=None):
+                 tail_policy=None, window_policy=None, timebase_config=None, window_jitter=None):
         self.path=Path(catalog_path)
         self.catalog=json.loads(self.path.read_text(encoding='utf-8'))
         self.config=dict(self.catalog['input_config'])
         if tail_policy is not None:
             self.config['tail']=dict(self.config['tail'],policy=tail_policy)
+        if window_policy is not None:
+            if window_policy == {'name': 'board_timebase', 'halfwidth_samples': 80}:
+                if timebase_config is None:
+                    raise ValueError('Board timebase artifact is required.')
+                self.config.update(window_halfwidth_policy='board_timebase',window_halfwidth_samples=80,
+                    timebase_calibration_sha256=timebase_config['_artifact_sha256'])
+            elif window_policy == {'name': 'half_interval_capped', 'cap_samples': 110}:
+                self.config.update(window_halfwidth_policy=window_policy['name'],
+                                   window_max_halfwidth_samples=window_policy['cap_samples'])
+            else:
+                raise ValueError('Unknown versioned input window policy.')
+        self.timebase_rows={r['board']:r for r in timebase_config['rows']} if timebase_config is not None else {}
+        if window_jitter is not None and (timebase_config is None or window_jitter !=
+                {'enabled':True,'max_shift_samples':24,'seed':23,'distribution':'uniform'}):
+            raise ValueError('Unknown training window jitter strategy.')
+        self.window_jitter=window_jitter
+        self.jitter_epoch=0
         self.physical_config=physical_config
+        if physical_config is not None:
+            if physical_config.get('input_window_policy') != window_policy:
+                raise ValueError('Physical statistics and dataset window policy disagree.')
+            expected = physical_config.get('effective_input_config')
+            if expected is not None and expected != self.config:
+                raise ValueError('Physical statistics and effective dataset input config disagree.')
         self.shards=[]; refs=[]
         requested=list(entities)
         if not requested or len(set(requested))!=len(requested):
@@ -60,6 +83,11 @@ class RFShardDataset:
         self.refs=np.concatenate(refs)
         self.training=training
         self.evaluation_weights=None
+
+    def set_epoch(self,epoch):
+        if type(epoch) is not int or epoch<0:
+            raise ValueError('A nonnegative epoch is required.')
+        self.jitter_epoch=epoch
 
     def use_frozen_evaluation_selection(self, path):
         if self.training or self.evaluation_weights is not None:
@@ -101,12 +129,21 @@ class RFShardDataset:
         for index in indices:
             s,i=self.refs[int(index)];shard=self.shards[s];a=shard['arrays'];k=shard['K']
             start=int(a['offsets'][i]);length=int(a['lengths'][i])
-            x,meta,info=transform_trace(shard['rf'][start:start+length],shard,self.config)
+            shift=0.
+            if self.training and self.window_jitter is not None:
+                from a3_ultrasound.data.board_timebase import shared_window_shift
+                shift=shared_window_shift(self.window_jitter['seed'],self.jitter_epoch,
+                    int(shard['ordinal']),int(a['source_row'][i]),self.window_jitter['max_shift_samples'])
+            x,meta,info=transform_trace(shard['rf'][start:start+length],shard,self.config,
+                timebase=self.timebase_rows.get(shard['entity']),window_shift=shift)
             if self.physical_config is not None:
-                from a3_ultrasound.data.physical_features import energy_log_ratios,physical_tokens
+                from a3_ultrasound.data.physical_features import energy_log_ratios,physical_tokens,packed_energy_bounds
                 p=self.physical_config;tau=np.asarray(info['nominal_tof_samples'])
-                ratios=energy_log_ratios(x,tau-info['halfwidth_samples'],tau+info['halfwidth_samples'],
-                                        front_end=p['front_end_samples'],epsilon=p['epsilon'])
+                if shard['entity'] in self.timebase_rows:
+                    left,right=packed_energy_bounds(meta,info['valid_length'],k)
+                else:
+                    left,right=tau-info['halfwidth_samples'],tau+info['halfwidth_samples']
+                ratios=energy_log_ratios(x,left,right,front_end=p['front_end_samples'],epsilon=p['epsilon'])
                 loc,ctx=physical_tokens(ratios,mean=p['mean'],std=p['std'])
                 physical_loc.append(loc);physical_ctx.append(ctx)
             y=np.zeros(6,dtype=np.int64);y[:k]=a['y'][i]

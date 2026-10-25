@@ -16,6 +16,7 @@ from a3_ultrasound.data.epoch_sampling import use_epoch
 from a3_ultrasound.validation_diagnostics import CorrectionArchive
 from a3_ultrasound.freeze_protocol import PROTOCOL as FREEZE_PROTOCOL,validate_freeze_config,verify_panels,commit_identity
 from a3_ultrasound.v15_protocol import PROTOCOL as V15_PROTOCOL,validate_config as validate_v15_config,load_physical_artifacts,copy_runtime_artifacts
+from a3_ultrasound.v15_protocol import load_timebase_artifact
 
 
 def save(path,data):path.write_text(json.dumps(data,ensure_ascii=False,indent=2,allow_nan=False)+'\n',encoding='utf-8')
@@ -114,6 +115,7 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
     if tc.device=='cuda' and not torch.cuda.is_available():raise RuntimeError('CUDA unavailable; no silent fallback.')
     model_config=ModelConfig(**dict(cfg['model'],head_type=head))
     physical, m6 = load_physical_artifacts(cfg) if v15 else (None,None)
+    timebase = load_timebase_artifact(cfg) if v15 else None
     if model_config.physical_features and not v15:
         raise ValueError('Physical stream training requires the V1.5 normalization contract.')
     if frozen:verify_panels(cfg,catalog_signature(catalog))
@@ -123,14 +125,17 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
     training=RFShardDataset(catalog_path,fold['train'],training=True,seed=seed,
         normal_ratio=cfg['normal_to_positive'],
         diagnostic_per_class=cfg['diagnostic']['per_entity_per_class'] if diagnostic else None,
-        physical_config=physical,tail_policy=cfg.get('input_tail_policy'))
+        physical_config=physical,tail_policy=cfg.get('input_tail_policy'),
+        window_policy=cfg.get('input_window_policy'),timebase_config=timebase,
+        window_jitter=cfg.get('window_jitter'))
     if not diagnostic and not cfg.get('epoch_selection_root'):
         selection=Path(cfg['frozen_selection_root'])/f'{fold_name}_s{seed}.npy'
         if not np.array_equal(training.refs,np.load(selection,allow_pickle=False)):
             raise ValueError('Training selection differs from frozen specimen/seed indices.')
     # Diagnostic never opens outer validation or test RF. Formal uses validation only.
     validation=None if diagnostic else RFShardDataset(catalog_path,fold['validation'],
-        physical_config=physical,tail_policy=cfg.get('input_tail_policy'))
+        physical_config=physical,tail_policy=cfg.get('input_tail_policy'),
+        window_policy=cfg.get('input_window_policy'),timebase_config=timebase)
     validation_sampling=None
     if validation is not None and cfg.get('validation_selection_root'):
         selection_root=Path(cfg['validation_selection_root'])
@@ -171,6 +176,10 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
             physical_statistics_sha256=cfg['physical_statistics_sha256'],m6_decision_sha256=cfg['m6_decision_sha256'],
             physical_interpretation='Engineering energy ratio; front and first Local overlap on 3mm plates; not calibrated reflectivity or causal isolation.')
         copy_runtime_artifacts(cfg,output)
+        if timebase is not None:
+            resolved.update(timebase_calibration_sha256=cfg['timebase_calibration_sha256'],
+                window_jitter=cfg['window_jitter'],
+                window_jitter_identity='seed,epoch,catalog ordinal,source_row; common to all Heads; evaluation shift0')
     resolved.update(code_version=code_version,commit_hash=code_version.get('commit'),config_sha256=config_sha256,
                     protocol=cfg.get('protocol'),automatic_screening=False if frozen else development,old_weights_reused=False)
     if development:

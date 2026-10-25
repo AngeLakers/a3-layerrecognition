@@ -20,7 +20,7 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--config',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True);p.add_argument('--device',choices=['cpu','cuda'],default='cpu')
     a=p.parse_args();sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
-    from a3_ultrasound.v15_protocol import HEADS,validate_config,load_physical_artifacts
+    from a3_ultrasound.v15_protocol import HEADS,validate_config,load_physical_artifacts,load_timebase_artifact
     from a3_ultrasound.freeze_protocol import verify_panels
     from a3_ultrasound.stream_training import catalog_signature
     from a3_ultrasound.training import ModelConfig,TrainingConfig,build_model,build_optimizer,TensorDataset,evaluate
@@ -39,7 +39,8 @@ def main():
         torch.cuda.set_per_process_memory_fraction(min(1.,7*1024**3/torch.cuda.get_device_properties(0).total_memory))
     torch.set_num_threads(2)
     ds=RFShardDataset(cfg['catalog'],cfg['folds'][0]['train'],training=True,seed=23,
-        physical_config=physical,tail_policy='nominal_fixed')
+        physical_config=physical,tail_policy='nominal_fixed',window_policy=cfg.get('input_window_policy'),
+        timebase_config=load_timebase_artifact(cfg),window_jitter=cfg.get('window_jitter'))
     sig=catalog_signature(ds.catalog);verify_panels(cfg,sig)
     hashes=[use_epoch(ds,cfg['epoch_selection_root'],e,seed=23,catalog_signature=sig) for e in range(1,41)]
     use_epoch(ds,cfg['epoch_selection_root'],1,seed=23,catalog_signature=sig)

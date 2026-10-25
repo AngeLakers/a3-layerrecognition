@@ -46,6 +46,8 @@ def freeze_epochs(dataset, root, *, seed, epochs, catalog_signature, positive_fr
 
 def use_epoch(dataset, root, epoch, *, seed, catalog_signature):
     if not dataset.training:raise ValueError('Only training datasets accept epoch selection.')
+    if hasattr(dataset,'set_epoch'):
+        dataset.set_epoch(epoch)
     root=Path(root);manifest=json.loads((root/'manifest.json').read_text(encoding='utf-8'))
     if manifest['seed']!=seed or manifest['entities']!=dataset.entities or manifest['catalog_signature']!=catalog_signature:
         raise ValueError('Epoch selection seed/entities/catalog mismatch.')

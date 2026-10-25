@@ -1,0 +1,4 @@
+# Release JSON hashes must survive Windows checkouts and Git archives.
+artifacts/v1.5.2/*.json text eol=lf
+configs/experiment/v1_5_2_freeze.json text eol=lf
+reports/v152_timebase_calibration.md text eol=lf

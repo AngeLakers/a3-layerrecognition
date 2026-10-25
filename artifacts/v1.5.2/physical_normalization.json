@@ -1,0 +1,206 @@
+{
+  "front_end_samples": 180,
+  "epsilon": 1e-08,
+  "mean": -7.075150991274688,
+  "std": 0.9816949969396798,
+  "variance_ddof": 0,
+  "interface_count": 3836015,
+  "entities": [
+    "TCL3-2",
+    "TCL3-3",
+    "TCL3-5",
+    "TCL3-6",
+    "TCL4-3",
+    "TCL4-4",
+    "薄"
+  ],
+  "input_tail_policy": "nominal_fixed",
+  "normalization_divisor": 131,
+  "input_window_policy": {
+    "name": "board_timebase",
+    "halfwidth_samples": 80
+  },
+  "timebase_calibration_sha256": "0d02b7648e201d1e19e15f6fdbf659c8d979ddb3c9a4940a4f465637ac16ae55",
+  "effective_input_config": {
+    "id": "a3-labels-v2-fixed-green-design-interiors-20261024",
+    "status": "V2_FROZEN_PRELAUNCH",
+    "specimen_inventory": "I:/programming/实验资料/A3/refine-logs/plan_13specimens_20261022/specimens.json",
+    "split_draft": "I:/programming/实验资料/A3/refine-logs/plan_13specimens_20261022/split_draft.json",
+    "review_locations": "I:/programming/实验资料/A3/refine-logs/plan_13specimens_20261022/localization_review_todo.csv",
+    "sampling_rate_hz": 200000000,
+    "sampling_rate_status": "working acquisition assumption; defect-location compatibility check only",
+    "sound_speed_mps": {
+      "TC4": 6100,
+      "AL": 6320
+    },
+    "sound_speed_source": "https://ims.evidentscientific.com/ko/learn/ndt-tutorials/thickness-gauge/appendices-velocities",
+    "sound_speed_scope": "generic material longitudinal nominal values; 6100 is generic titanium proxy, not calibrated TC4",
+    "time_reference": "cropped_record_origin_is_zero",
+    "batch_reference_samples": 0,
+    "window_total_us": 0.7,
+    "prior": "Gaussian log bias with independent sigma and strength inside hard Local support",
+    "normalization_divisor": 131,
+    "normalization_scope": "fixed numeric scaling, not physical gain calibration",
+    "tail": {
+      "nominal_backwall_guard_us": 0.5,
+      "active_boundary_check_samples": 32,
+      "quiet_run_samples": 32,
+      "quiet_floor_raw_units": 3,
+      "quiet_guard_samples": 64,
+      "no_quiet": "retain_current_tail",
+      "policy": "nominal_fixed",
+      "scope": "Retain all later activity above the fixed existing threshold plus guard; not an echo-identity detector.",
+      "fixed_prefix_samples_by_entity": {
+        "薄": 900
+      }
+    },
+    "training_labels": "design interiors admitted at fixed green registration; source quality, exterior buffer and unresolved design masks retained; prior nine position regions restored",
+    "time_qa": {
+      "only_designed_defect_records": true,
+      "per_interface": 24,
+      "seed": 23,
+      "search_halfwidth_us": 0.65,
+      "search_scope": "diagnostic peak candidate only; not automatic truth, calibration, filtering, or label reassignment"
+    },
+    "smoke": {
+      "fold": "F1",
+      "seed": 23,
+      "per_entity_positive": 8,
+      "per_entity_normal": 8,
+      "batch_size": 8,
+      "updates_per_head": 2,
+      "learning_rate": 0.001,
+      "backbone": "resnet1d",
+      "device": "cuda",
+      "scope": "F1 training entities only, software flow, no held-out performance or tuning"
+    },
+    "formal_training_permitted": false,
+    "readout": {
+      "sigma_us": 0.18,
+      "prior_strength": 0.5,
+      "attention_heads": 1,
+      "output_dim": 64,
+      "attention_type": "single-head additive content attention"
+    },
+    "model": {
+      "query_dim": 64,
+      "attention_dim": 64,
+      "token_dim": 64,
+      "common_feature_dim": 64
+    },
+    "ablation_candidates": [
+      {
+        "id": "A",
+        "sigma_us": 0.18,
+        "prior_strength": 0.0
+      },
+      {
+        "id": "B",
+        "sigma_us": 0.18,
+        "prior_strength": 0.5
+      },
+      {
+        "id": "C",
+        "sigma_us": 0.18,
+        "prior_strength": 1.0
+      },
+      {
+        "id": "D",
+        "sigma_us": 0.25,
+        "prior_strength": 0.5
+      }
+    ],
+    "ablation_scope": "Planned, not executed; identical hard support/backbone/split. No cross-fold tuning from held-out results.",
+    "supersedes": "query07_v2 additional tail-cut policy; Query unchanged; old evidence preserved",
+    "label_version": "V2",
+    "v1_catalog_signature": "db7f90d231dda179d37b62d71f0dbdc0f4950f065ca2a33bd8ffabc2419aff73",
+    "window_halfwidth_policy": "board_timebase",
+    "window_halfwidth_samples": 80,
+    "timebase_calibration_sha256": "0d02b7648e201d1e19e15f6fdbf659c8d979ddb3c9a4940a4f465637ac16ae55"
+  },
+  "scope": "All unique complete reliable F1 training cohort including normals and defects; unjittered fit",
+  "rows": [
+    {
+      "board": "TCL3-2",
+      "records": 252918,
+      "interfaces": 505836,
+      "tau": [
+        252.0,
+        430.0
+      ],
+      "half": 80,
+      "cohort_source_rows_sha256": "6dae50273b95dc189b23de8bfdbfb17a46431d2e5e2b53ee6a42040bc100933c"
+    },
+    {
+      "board": "TCL3-3",
+      "records": 247876,
+      "interfaces": 495752,
+      "tau": [
+        257.0,
+        437.0
+      ],
+      "half": 80,
+      "cohort_source_rows_sha256": "f303350b84d9c92c11715e53c8879787137e5705c021fe73a40177fe895ccdad"
+    },
+    {
+      "board": "TCL3-5",
+      "records": 248038,
+      "interfaces": 496076,
+      "tau": [
+        255.0,
+        435.0
+      ],
+      "half": 80,
+      "cohort_source_rows_sha256": "13918acaf20f2b4737f580b846e64733c8618e68951e042299068c5e97701e64"
+    },
+    {
+      "board": "TCL3-6",
+      "records": 254848,
+      "interfaces": 509696,
+      "tau": [
+        251.0,
+        427.0
+      ],
+      "half": 80,
+      "cohort_source_rows_sha256": "2cdc1c54b74bf21237a34fa99bd72645ae4a4adbfc559da3407668a4f0e5ac20"
+    },
+    {
+      "board": "TCL4-3",
+      "records": 241969,
+      "interfaces": 725907,
+      "tau": [
+        305.0,
+        537.0,
+        769.0
+      ],
+      "half": 80,
+      "cohort_source_rows_sha256": "e1c4977b0d0bead287d7c5febc1dd1d16383d08ced0019304ca516672db1e3e7"
+    },
+    {
+      "board": "TCL4-4",
+      "records": 245018,
+      "interfaces": 735054,
+      "tau": [
+        308.5,
+        543.0,
+        777.5
+      ],
+      "half": 80,
+      "cohort_source_rows_sha256": "855a72eca10d206cba0a8c05ef4273da9d7cc77c6035f6287ab78acdb9fd85aa"
+    },
+    {
+      "board": "薄",
+      "records": 183847,
+      "interfaces": 367694,
+      "tau": [
+        313.0,
+        547.0
+      ],
+      "half": 80,
+      "cohort_source_rows_sha256": "da7001f291f3cbd1bc2be932a4da2f82bcd4cac9cd6abc967062b65d04e01cf0"
+    }
+  ],
+  "validation_read": false,
+  "test_read": false,
+  "training_called": false
+}

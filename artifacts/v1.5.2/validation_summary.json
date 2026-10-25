@@ -1,0 +1,449 @@
+{
+  "rows": [
+    {
+      "board": "TCL3-2",
+      "k": 1,
+      "requested": 24,
+      "records": 0,
+      "failed": 24,
+      "old": {
+        "count": 0,
+        "median": null,
+        "iqr": null,
+        "within80": null
+      },
+      "calibrated": {
+        "count": 0,
+        "median": null,
+        "iqr": null,
+        "within80": null
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": true
+    },
+    {
+      "board": "TCL3-2",
+      "k": 2,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": 33.557377049180275,
+        "iqr": 4.25,
+        "within80": 1.0
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -3.0,
+        "iqr": 4.25,
+        "within80": 1.0
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": false
+    },
+    {
+      "board": "TCL3-3",
+      "k": 1,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": 50.27868852459014,
+        "iqr": 3.0,
+        "within80": 1.0
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -10.0,
+        "iqr": 3.0,
+        "within80": 1.0
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": true
+    },
+    {
+      "board": "TCL3-3",
+      "k": 2,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": 34.557377049180275,
+        "iqr": 5.25,
+        "within80": 1.0
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -9.0,
+        "iqr": 5.25,
+        "within80": 1.0
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": false
+    },
+    {
+      "board": "TCL3-5",
+      "k": 1,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": 49.77868852459014,
+        "iqr": 5.5,
+        "within80": 1.0
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -8.5,
+        "iqr": 5.5,
+        "within80": 1.0
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": true
+    },
+    {
+      "board": "TCL3-5",
+      "k": 2,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": 33.057377049180275,
+        "iqr": 5.0,
+        "within80": 1.0
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -8.5,
+        "iqr": 5.0,
+        "within80": 1.0
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": false
+    },
+    {
+      "board": "TCL3-6",
+      "k": 1,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": 47.27868852459014,
+        "iqr": 4.0,
+        "within80": 1.0
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -7.0,
+        "iqr": 4.0,
+        "within80": 1.0
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": true
+    },
+    {
+      "board": "TCL3-6",
+      "k": 2,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": 26.557377049180275,
+        "iqr": 4.25,
+        "within80": 1.0
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -7.0,
+        "iqr": 4.25,
+        "within80": 1.0
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": false
+    },
+    {
+      "board": "TCL4-3",
+      "k": 1,
+      "requested": 24,
+      "records": 0,
+      "failed": 24,
+      "old": {
+        "count": 0,
+        "median": null,
+        "iqr": null,
+        "within80": null
+      },
+      "calibrated": {
+        "count": 0,
+        "median": null,
+        "iqr": null,
+        "within80": null
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": false
+    },
+    {
+      "board": "TCL4-3",
+      "k": 2,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": -15.090163934426187,
+        "iqr": 2.25,
+        "within80": 1.0
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -27.5,
+        "iqr": 2.25,
+        "within80": 1.0
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": false
+    },
+    {
+      "board": "TCL4-3",
+      "k": 3,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": -30.885245901639337,
+        "iqr": 6.25,
+        "within80": 1.0
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -13.0,
+        "iqr": 6.25,
+        "within80": 1.0
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": false
+    },
+    {
+      "board": "TCL4-4",
+      "k": 1,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": 35.70491803278691,
+        "iqr": 1.25,
+        "within80": 1.0
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -10.5,
+        "iqr": 1.25,
+        "within80": 1.0
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": false
+    },
+    {
+      "board": "TCL4-4",
+      "k": 2,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": 2.9098360655738134,
+        "iqr": 3.0,
+        "within80": 1.0
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -15.5,
+        "iqr": 3.0,
+        "within80": 1.0
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": false
+    },
+    {
+      "board": "TCL4-4",
+      "k": 3,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": -24.385245901639337,
+        "iqr": 4.5,
+        "within80": 1.0
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -15.0,
+        "iqr": 4.5,
+        "within80": 1.0
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": false
+    },
+    {
+      "board": "薄",
+      "k": 1,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": 80.12658227848098,
+        "iqr": 4.5,
+        "within80": 0.4166666666666667
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -43.0,
+        "iqr": 4.5,
+        "within80": 0.9166666666666666
+      },
+      "search_edge": 1,
+      "low_amplitude": 0,
+      "shallow_3mm": true
+    },
+    {
+      "board": "薄",
+      "k": 2,
+      "requested": 24,
+      "records": 24,
+      "failed": 0,
+      "old": {
+        "count": 24,
+        "median": 114.75316455696196,
+        "iqr": 10.25,
+        "within80": 0.0
+      },
+      "calibrated": {
+        "count": 24,
+        "median": -52.5,
+        "iqr": 10.25,
+        "within80": 1.0
+      },
+      "search_edge": 0,
+      "low_amplitude": 0,
+      "shallow_3mm": false
+    }
+  ],
+  "decision": {
+    "adopt_calibration": true,
+    "pooled_absolute_offset_median_old": 28.885245901639337,
+    "pooled_absolute_offset_median_calibrated": 13.0,
+    "pooled_improves": true,
+    "all_cells_within20": true,
+    "deep_records": 216,
+    "cells": [
+      {
+        "board": "TCL3-2",
+        "k": 2,
+        "old_median": 33.557377049180275,
+        "calibrated_median": -3.0,
+        "worsening": -30.557377049180275,
+        "within20": true
+      },
+      {
+        "board": "TCL3-3",
+        "k": 2,
+        "old_median": 34.557377049180275,
+        "calibrated_median": -9.0,
+        "worsening": -25.557377049180275,
+        "within20": true
+      },
+      {
+        "board": "TCL3-5",
+        "k": 2,
+        "old_median": 33.057377049180275,
+        "calibrated_median": -8.5,
+        "worsening": -24.557377049180275,
+        "within20": true
+      },
+      {
+        "board": "TCL3-6",
+        "k": 2,
+        "old_median": 26.557377049180275,
+        "calibrated_median": -7.0,
+        "worsening": -19.557377049180275,
+        "within20": true
+      },
+      {
+        "board": "TCL4-3",
+        "k": 2,
+        "old_median": -15.090163934426187,
+        "calibrated_median": -27.5,
+        "worsening": 12.409836065573813,
+        "within20": true
+      },
+      {
+        "board": "TCL4-3",
+        "k": 3,
+        "old_median": -30.885245901639337,
+        "calibrated_median": -13.0,
+        "worsening": -17.885245901639337,
+        "within20": true
+      },
+      {
+        "board": "TCL4-4",
+        "k": 2,
+        "old_median": 2.9098360655738134,
+        "calibrated_median": -15.5,
+        "worsening": 12.590163934426187,
+        "within20": true
+      },
+      {
+        "board": "TCL4-4",
+        "k": 3,
+        "old_median": -24.385245901639337,
+        "calibrated_median": -15.0,
+        "worsening": -9.385245901639337,
+        "within20": true
+      },
+      {
+        "board": "薄",
+        "k": 2,
+        "old_median": 114.75316455696196,
+        "calibrated_median": -52.5,
+        "worsening": -62.25316455696196,
+        "within20": true
+      }
+    ],
+    "scope": "One decision applied to all13 boards",
+    "all_fixed_deep_records_observed": true,
+    "requested_deep_records": 216
+  },
+  "fixed_records": 384,
+  "valid_candidates": 336,
+  "missing_candidates": 48,
+  "definition": "One peak per trace from frozen RF-only template gate; same observed peak compared to nominal and calibrated targets; candidate not physical truth",
+  "heldout_labels_read": false,
+  "fixed_cohort_sha256": "8a4d5c88c7c96b29d8e2ba6c71cac662e153dbf1866d67f1f71d4c5f8db2f7cd",
+  "observer_source_sha256": "3aa5a7775ce80343c619d8c873769849ef95ac9725f4daad462e4a9570b4c002",
+  "scope": "Fixed development panel, not independent echo truth or classifier performance"
+}

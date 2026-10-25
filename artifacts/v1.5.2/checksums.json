@@ -1,0 +1,14 @@
+{
+  "version": "v1.5.2",
+  "files": {
+    "data_manifest.json": "664e05874453f0dfa1135b1adecfdf393bd1247347dfb326a78a7c87f20c325c",
+    "m6_decision.json": "7ef07f0269a1e558393a206ebafe1b6221e1695a120320e1d16483870785ea0e",
+    "observation_gates.json": "747e22148a4ea6c42dd65f2a38d1fdbed30954340b75e18482753c39a5a19a86",
+    "physical_normalization.json": "f6f89f8acf4ca2ff17dc4fdb82a38e8162fc1710f6b916ab96816c4024e982bd",
+    "rf_calibration.json": "33bf094f8801b8aa78c0642d5832ceeb57d43c60c43e25b7550edbc06bbc432e",
+    "timebase.json": "0d02b7648e201d1e19e15f6fdbf659c8d979ddb3c9a4940a4f465637ac16ae55",
+    "validation_summary.json": "8c18a78071abb7734ce93bdf8b82cc4bb44f23328af6f51a2c2ece36b9c135d4"
+  },
+  "training_permitted": false,
+  "scope": "Input calibration and implementation release; no training/performance claim"
+}

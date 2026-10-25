@@ -1,10 +1,12 @@
 # A3 Layer Recognition
 
-当前工程版本为 **V1.4**（源码包1.4.0，冻结协议V1.4-freeze，标签V2）。冻结运行仅含Proposed rho=3、Vanilla、Independent，采用GN8、两字段Query、完整联合选模、2%正常误报护栏及逐epoch正常重抽；B8预算40/15/10、min_delta=.002。饱和率、方向和旧1%误报不触发自动淘汰，B8常规早停保留。outer保持关闭，源码冻结与软件测试不代表科研性能验收。
+当前分支工程版本为 **V1.5.2**：逐板RF始波/一次底波包络峰中位数均分时间基准，Local半宽80点、Gaussian sigma40/强度0.5，训练窗口共享±24点抖动。薄板模型输入900点，其余板原长度不变；沿用V1.5.1按有效长度分组的整批主干。发布配置保持训练许可为false；本版本没有启动正式训练或outer模型评价。详见[校准报告](reports/v152_timebase_calibration.md)。
+
+历史V1.4（源码包1.4.0，冻结协议V1.4-freeze，标签V2）运行仅含Proposed rho=3、Vanilla、Independent，采用GN8、两字段Query、完整联合选模、2%正常误报护栏及逐epoch正常重抽；B8预算40/15/10、min_delta=.002。饱和率、方向和旧1%误报不触发自动淘汰，B8常规早停保留。outer保持关闭，源码冻结与软件测试不代表科研性能验收。
 
 旧V1.3 commit113a02d及其实验结果保留为历史，legacy3/batch配置可严格加载旧checkpoint；新模型须显式配置a3-v1.4/group8/position2。原60格队列不接管本轮诊断。
 
-当前冻结配置为 [v1_4_freeze.json](configs/experiment/v1_4_freeze.json)，发布模板中的真实训练许可为false、路径和commit为占位符；克隆或运行单元测试不会自动启动真实训练。历史D1/D2、rho1、shadow与缓存入口保留用于追溯，不属于冻结三格的启动清单。
+当前冻结模板为 [v1_5_2_freeze.json](configs/experiment/v1_5_2_freeze.json)，真实训练许可为false、数据路径和commit为占位符；克隆或运行单元测试不会自动启动真实训练。历史[v1_4_freeze.json](configs/experiment/v1_4_freeze.json)、D1/D2、rho1、shadow与缓存入口保留用于追溯。
 
 每个真实运行的summary记录commit_hash与实际配置文件config_sha256。Proposed的best_guarded.pt、best_fallback.pt各有对应epoch的best_*_diagnostics.npz，保存逐非首界面g/c/g*c、上游truth/mask与身份/IPW；没有满足2%护栏的epoch时不伪造guarded checkpoint，guard_violated=true且fallback只作诊断。新多缺陷漏报、单报多及上游异常条件下游召回仅记录、不选模。
 
@@ -24,6 +26,17 @@ Local Independent、Local＋Pre Independent、Vanilla Chain、Proposed通过同�
 ## 运行
 
 使用已有`aislee-a3-layercongition` Conda解释器，在本项目根目录运行：
+
+先把V1.5.2模板绑定到已有本机数据和确切tag提交。输出是新的本地配置，训练仍关闭：
+
+```text
+python scripts/a3_v152_materialize.py --template configs/experiment/v1_5_2_freeze.json --catalog <CATALOG> --epoch-root <EPOCH_ROOT> --validation-root <VALIDATION_ROOT> --source-commit <EXACT_TAG_COMMIT> --output <NEW_RUNTIME_CONFIG>
+python -m pytest -q
+```
+
+小型[校准/训练统计/哈希清单](artifacts/v1.5.2/checksums.json)入库；原始RF、数据身份数组和checkpoint不入库。实际运行需要现有私有数据，仓库内摘要不能替代它们。校准采用判据是固定F1训练面板的开发检查，不是物理回波身份或分类性能的独立验证。
+
+以下为历史V1.3合成入口示例：
 
 ```powershell
 python scripts/run_a3.py --config configs/experiment/v1_3_synthetic.yaml --head proposed --output local/new_v13_proposed

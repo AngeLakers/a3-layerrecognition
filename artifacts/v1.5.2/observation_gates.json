@@ -1,0 +1,341 @@
+{
+  "version": "RF-only-fixed-observation-gates-v1",
+  "rows": [
+    {
+      "board": "TCL3-1",
+      "K": 2,
+      "gates": [
+        {
+          "k": 2,
+          "template_peak": 420,
+          "left": 340,
+          "right": 500,
+          "template_amplitude": 8.074237089704495
+        }
+      ],
+      "missing": [
+        1
+      ],
+      "association": "Nearest equal-transit interface fraction, tolerance0.4*interval; RF-only template; not echo ground truth",
+      "sample_rows_sha256": "ab98114d754bdd65cb9afb1c2eaf6ac2d8f4dcbf6d8e1d5d07940f639037e843",
+      "template_sha256": "f0b2ce133a571bd45599674b1a28272b3cf0d8f129578981a4fb34082ec26fe4"
+    },
+    {
+      "board": "TCL3-2",
+      "K": 2,
+      "gates": [
+        {
+          "k": 2,
+          "template_peak": 432,
+          "left": 352,
+          "right": 512,
+          "template_amplitude": 11.046354829060023
+        }
+      ],
+      "missing": [
+        1
+      ],
+      "association": "Nearest equal-transit interface fraction, tolerance0.4*interval; RF-only template; not echo ground truth",
+      "sample_rows_sha256": "d456950e06e36af5cd8c430071841d2a7206f4dbe2ef9861ae1e2ee97b967bd5",
+      "template_sha256": "07022671b492af836204e0403c361201a0c59d063e6d5740a82ed45e1abbc61e"
+    },
+    {
+      "board": "TCL3-3",
+      "K": 2,
+      "gates": [
+        {
+          "k": 1,
+          "template_peak": 254,
+          "left": 201,
+          "right": 334,
+          "template_amplitude": 32.45638809174712
+        },
+        {
+          "k": 2,
+          "template_peak": 419,
+          "left": 339,
+          "right": 499,
+          "template_amplitude": 11.612081711561357
+        }
+      ],
+      "missing": [],
+      "association": "Nearest equal-transit interface fraction, tolerance0.4*interval; RF-only template; not echo ground truth",
+      "sample_rows_sha256": "eea4565ccbd6fdfea096b5ecdcac795b30df6bfa47bce1120e3ba6fe4464f8b3",
+      "template_sha256": "79908612632529076acc24cdb2c827d68559a563b7c86f1f0538fb59d5cdc3d7"
+    },
+    {
+      "board": "TCL3-4",
+      "K": 2,
+      "gates": [
+        {
+          "k": 1,
+          "template_peak": 240,
+          "left": 201,
+          "right": 320,
+          "template_amplitude": 21.528181447054944
+        },
+        {
+          "k": 2,
+          "template_peak": 431,
+          "left": 351,
+          "right": 511,
+          "template_amplitude": 28.467207268421298
+        }
+      ],
+      "missing": [],
+      "association": "Nearest equal-transit interface fraction, tolerance0.4*interval; RF-only template; not echo ground truth",
+      "sample_rows_sha256": "bc876f7b083d35b66acfd53f0450044d45c0b5711b66bfd1895eccdbcc564eee",
+      "template_sha256": "d2ca0ba653a6f657fa5d1fcc5f229d53e3d4968aaaf03c518038e49603475982"
+    },
+    {
+      "board": "TCL3-5",
+      "K": 2,
+      "gates": [
+        {
+          "k": 1,
+          "template_peak": 257,
+          "left": 201,
+          "right": 337,
+          "template_amplitude": 12.822301717837266
+        },
+        {
+          "k": 2,
+          "template_peak": 425,
+          "left": 345,
+          "right": 505,
+          "template_amplitude": 13.765902272300972
+        }
+      ],
+      "missing": [],
+      "association": "Nearest equal-transit interface fraction, tolerance0.4*interval; RF-only template; not echo ground truth",
+      "sample_rows_sha256": "2a2603df5cea7cc93c7e3db7cd1b65bb75c158c9e7196ee0c82a15ce3d844663",
+      "template_sha256": "b1a8005cf3e6eb8232e376037e9009b9d46575d27e34ee467c4c68d284836a4c"
+    },
+    {
+      "board": "TCL3-6",
+      "K": 2,
+      "gates": [
+        {
+          "k": 1,
+          "template_peak": 255,
+          "left": 201,
+          "right": 335,
+          "template_amplitude": 22.47507868573324
+        },
+        {
+          "k": 2,
+          "template_peak": 415,
+          "left": 336,
+          "right": 495,
+          "template_amplitude": 18.29599348322548
+        }
+      ],
+      "missing": [],
+      "association": "Nearest equal-transit interface fraction, tolerance0.4*interval; RF-only template; not echo ground truth",
+      "sample_rows_sha256": "53255eff139677228509e0b199c824fddabad4a2109fb101a0930c925a127e9b",
+      "template_sha256": "991080b38bc7cd9f87f9b69f55a11accd24130500cf5b6b10a587c0e3caaeefd"
+    },
+    {
+      "board": "TCL4-1",
+      "K": 3,
+      "gates": [
+        {
+          "k": 1,
+          "template_peak": 257,
+          "left": 201,
+          "right": 337,
+          "template_amplitude": 14.116516470168545
+        },
+        {
+          "k": 2,
+          "template_peak": 431,
+          "left": 351,
+          "right": 511,
+          "template_amplitude": 16.545311731447246
+        },
+        {
+          "k": 3,
+          "template_peak": 624,
+          "left": 544,
+          "right": 704,
+          "template_amplitude": 6.714668244048752
+        }
+      ],
+      "missing": [],
+      "association": "Nearest equal-transit interface fraction, tolerance0.4*interval; RF-only template; not echo ground truth",
+      "sample_rows_sha256": "25ca43a5d650fe3dc02a52697dda7a0a94d9191c8dd7ccc0b342837d3bc1cd11",
+      "template_sha256": "a3e827205c7e9dfc55af867ee9707271b7ca9814143e454c63d1478f59e5c832"
+    },
+    {
+      "board": "TCL4-2",
+      "K": 3,
+      "gates": [
+        {
+          "k": 1,
+          "template_peak": 247,
+          "left": 201,
+          "right": 323,
+          "template_amplitude": 22.63330423132654
+        },
+        {
+          "k": 2,
+          "template_peak": 400,
+          "left": 324,
+          "right": 480,
+          "template_amplitude": 17.339410016389937
+        },
+        {
+          "k": 3,
+          "template_peak": 592,
+          "left": 512,
+          "right": 672,
+          "template_amplitude": 6.867840246177258
+        }
+      ],
+      "missing": [],
+      "association": "Nearest equal-transit interface fraction, tolerance0.4*interval; RF-only template; not echo ground truth",
+      "sample_rows_sha256": "fb8f58446367fca6c0131d7bf3f06958d035de1c5c1f60e65d0f2d066e477007",
+      "template_sha256": "1963b5488d5e5bd7696435beede70927191090345cd8e6e1ba50dc0924d9722c"
+    },
+    {
+      "board": "TCL4-3",
+      "K": 3,
+      "gates": [
+        {
+          "k": 2,
+          "template_peak": 529,
+          "left": 449,
+          "right": 609,
+          "template_amplitude": 8.871439630490862
+        },
+        {
+          "k": 3,
+          "template_peak": 760,
+          "left": 680,
+          "right": 840,
+          "template_amplitude": 7.0104320155780036
+        }
+      ],
+      "missing": [
+        1
+      ],
+      "association": "Nearest equal-transit interface fraction, tolerance0.4*interval; RF-only template; not echo ground truth",
+      "sample_rows_sha256": "8b709215063bad95afc10eec03c2298b8f2efa48ffc13df12b591fcdc4c6f353",
+      "template_sha256": "e7e0627d1c4fa4c169abf31f71fb2906b63907fb5799531bebf40bc40af43f79"
+    },
+    {
+      "board": "TCL4-4",
+      "K": 3,
+      "gates": [
+        {
+          "k": 1,
+          "template_peak": 296,
+          "left": 216,
+          "right": 376,
+          "template_amplitude": 14.401778483022758
+        },
+        {
+          "k": 2,
+          "template_peak": 510,
+          "left": 430,
+          "right": 590,
+          "template_amplitude": 22.024459149625958
+        },
+        {
+          "k": 3,
+          "template_peak": 756,
+          "left": 676,
+          "right": 836,
+          "template_amplitude": 7.475425181355972
+        }
+      ],
+      "missing": [],
+      "association": "Nearest equal-transit interface fraction, tolerance0.4*interval; RF-only template; not echo ground truth",
+      "sample_rows_sha256": "ecb17fae040f0d16ef711d5570128c37289d2306d50335eabc9fc339c2886661",
+      "template_sha256": "9cc7b3c9504e401838e5deb45823c4f33568fb9017c90f346b89f723a04194ce"
+    },
+    {
+      "board": "厚1",
+      "K": 2,
+      "gates": [
+        {
+          "k": 1,
+          "template_peak": 651,
+          "left": 571,
+          "right": 731,
+          "template_amplitude": 133.13851579820033
+        },
+        {
+          "k": 2,
+          "template_peak": 1236,
+          "left": 1156,
+          "right": 1316,
+          "template_amplitude": 39.53524758851945
+        }
+      ],
+      "missing": [],
+      "association": "Nearest equal-transit interface fraction, tolerance0.4*interval; RF-only template; not echo ground truth",
+      "sample_rows_sha256": "04c0901a3e0386c76a12b990de3c6883e5af9ac35076a95ec4f159c6de877b02",
+      "template_sha256": "041d7f9bfabee50f21ded59bf2ffc86e354e976884da78cb92d1562d1792859c"
+    },
+    {
+      "board": "厚2",
+      "K": 2,
+      "gates": [
+        {
+          "k": 1,
+          "template_peak": 685,
+          "left": 605,
+          "right": 765,
+          "template_amplitude": 81.14221650547405
+        },
+        {
+          "k": 2,
+          "template_peak": 1271,
+          "left": 1191,
+          "right": 1351,
+          "template_amplitude": 27.586012546044394
+        }
+      ],
+      "missing": [],
+      "association": "Nearest equal-transit interface fraction, tolerance0.4*interval; RF-only template; not echo ground truth",
+      "sample_rows_sha256": "3e92ba49a61cb22df5c921b22fd1b17bb530863099fdbe8e4e543e972126d488",
+      "template_sha256": "7ecbf10666db640e2f7e4cde976dfd1a8aaf9e0e1c76add695ba7c0360319175"
+    },
+    {
+      "board": "薄",
+      "K": 2,
+      "gates": [
+        {
+          "k": 1,
+          "template_peak": 268,
+          "left": 201,
+          "right": 348,
+          "template_amplitude": 24.127023132759835
+        },
+        {
+          "k": 2,
+          "template_peak": 522,
+          "left": 442,
+          "right": 602,
+          "template_amplitude": 18.427614350872396
+        }
+      ],
+      "missing": [],
+      "association": "Nearest equal-transit interface fraction, tolerance0.4*interval; RF-only template; not echo ground truth",
+      "sample_rows_sha256": "cf3dfdc73a90f3c7f8e871760bfef763dfa2cee7a1eb17a8b2c1776d865d9382",
+      "template_sha256": "67d0e564a73ba1e74fd5a444a0006c2058e5f91ac4fc3954e068f4868fc111a6"
+    }
+  ],
+  "labels_read": false,
+  "parameters": {
+    "halfwidth": 80,
+    "front_exclusion": 200,
+    "backwall_guard": 80,
+    "min_peak_separation": 80,
+    "prominence_raw": 3.0,
+    "association_tolerance": 0.4
+  },
+  "fixed_before_D_label_access": true,
+  "protocol_sha256": "f2c2faf101c9861b8b36e65210b6487336cff2df203252e463abc2eb3342e3b1"
+}

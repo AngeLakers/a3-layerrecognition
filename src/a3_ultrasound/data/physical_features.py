@@ -5,6 +5,21 @@ import math
 import numpy as np
 
 
+def packed_energy_bounds(interface_meta, valid_length, k):
+    """Decode exactly the float32 bounds used by A3PCCModel._sample_windows.
+
+    Using pre-pack float64 centers can select another integer endpoint after
+    continuous jitter. Keep each multiply/subtract in float32 before energy
+    accumulation converts the decoded endpoints to float64.
+    """
+    meta=np.asarray(interface_meta,dtype=np.float32)
+    if meta.ndim!=2 or meta.shape[1]!=5 or not 1<=k<=len(meta) or valid_length<1:
+        raise ValueError('Packed metadata, positive length and valid interface count required.')
+    scale=np.float32(valid_length)
+    tau=meta[:k,1]*scale;left=meta[:k,3]*scale;right=meta[:k,4]*scale
+    return tau-left,tau+right
+
+
 def energy_log_ratios(trace, window_start, window_end, *, front_end, epsilon=1e-8):
     """Sum x^2 at inclusive integer sample centers, without altering RF."""
     x = np.asarray(trace, dtype=np.float64)
