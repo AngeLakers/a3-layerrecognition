@@ -35,6 +35,7 @@ from a3_ultrasound.prefix_perturbation import training_conditional
 class ModelConfig:
     architecture_version: str = "a3-v1.3"
     backbone_norm: str = "batch"
+    canonical_per_trace: bool = True
     query_view: str = "legacy3"
     head_type: str = "proposed"
     backbone: str = "resnet1d"
@@ -99,11 +100,13 @@ def build_model(config: ModelConfig) -> A3Model:
                                            dilations=(1, 2), use_norm=None)
     else:
         backbone = TsaiTimePreservingBackbone(config.backbone, feature_stage=config.backbone_stage,
-                                              backbone_norm=config.backbone_norm)
+                                              backbone_norm=config.backbone_norm,
+                                              canonical_per_trace=config.canonical_per_trace)
     kwargs = asdict(config)
     kwargs.pop("backbone")
     kwargs.pop("backbone_stage")
     kwargs.pop("backbone_norm")
+    kwargs.pop("canonical_per_trace")
     kwargs.pop("architecture_version")
     return A3Model(backbone=backbone, **kwargs)
 

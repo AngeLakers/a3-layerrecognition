@@ -247,6 +247,7 @@ class TsaiTimePreservingBackbone(nn.Module):
         inception_nf: int = 32,
         fcn_layers: Sequence[int] = (128, 256, 128),
         backbone_norm: str = "batch",
+        canonical_per_trace: bool = True,
     ) -> None:
         super().__init__()
         resolved_stage = "stage3" if feature_stage == "final_pre_pool" else feature_stage
@@ -302,6 +303,9 @@ class TsaiTimePreservingBackbone(nn.Module):
         if backbone_norm not in ("batch", "group8"):
             raise ValueError("backbone_norm must be batch or group8.")
         self.backbone_norm = backbone_norm
+        if type(canonical_per_trace) is not bool:
+            raise ValueError("canonical_per_trace must be bool.")
+        self.canonical_per_trace = canonical_per_trace
         if backbone_norm == "group8":
             self._replace_batch_norm(self.trunk)
 
@@ -326,7 +330,7 @@ class TsaiTimePreservingBackbone(nn.Module):
             length_mask,
             self.trunk,
             output_dim=self.output_dim,
-            canonical_per_trace=self.backbone_norm == "group8",
+            canonical_per_trace=self.backbone_norm == "group8" and self.canonical_per_trace,
         )
 
 

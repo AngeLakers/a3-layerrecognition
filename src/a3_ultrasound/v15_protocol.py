@@ -10,6 +10,10 @@ HEADS=('local_independent','local_pre_independent','vanilla_chain','proposed_v15
 
 def validate_config(cfg,*,fold_name,seed,head,require_permission=True):
     t,m=cfg['training'],cfg['model']
+    execution = cfg.get('execution_version', 'v1.5-freeze')
+    if (execution not in ('v1.5-freeze', 'v1.5.1')
+            or m.get('canonical_per_trace', True) is not (execution == 'v1.5-freeze')):
+        raise ValueError('Backbone execution mode differs from the declared V1.5 version.')
     fixed=dict(epochs=40,min_epochs=15,patience=10,min_delta=.002,
         normal_fpr_limit=.02,selection_rule='guarded_joint',batch_size=16,
         learning_rate=.001,weight_decay=0.,lambda_local=.3,scheduler_step_size=None,
