@@ -8,6 +8,7 @@ from typing import Literal, Sequence
 import torch
 from pytorch_tcn import TCN
 from torch import Tensor, nn
+from a3_ultrasound.speed import fast_structure,cpu_batch
 
 
 @dataclass(frozen=True)
@@ -77,13 +78,13 @@ def _validate_temporal_inputs(x_raw: Tensor, length_mask: Tensor) -> Tensor:
         raise ValueError("x_raw must contain at least one time sample.")
 
     valid_lengths = length_mask.sum(dim=1)
-    if torch.any(valid_lengths == 0):
+    if not fast_structure() and torch.any(valid_lengths == 0):
         raise ValueError("every trace must contain at least one valid sample.")
     expected_mask = (
         torch.arange(x_raw.shape[1], device=x_raw.device).unsqueeze(0)
         < valid_lengths.unsqueeze(1)
     )
-    if not torch.equal(length_mask, expected_mask):
+    if not fast_structure() and not torch.equal(length_mask, expected_mask):
         raise ValueError("length_mask must describe one contiguous valid prefix.")
     return valid_lengths
 
@@ -102,12 +103,12 @@ def _encode_by_valid_length(
     encoded_by_sample: list[Tensor | None] = [None] * x_raw.shape[0]
     centers_by_sample: list[Tensor | None] = [None] * x_raw.shape[0]
 
-    for valid_length_tensor in torch.unique(valid_lengths, sorted=True):
-        valid_length = int(valid_length_tensor.item())
-        batch_indices = torch.nonzero(
-            valid_lengths == valid_length_tensor,
-            as_tuple=False,
-        ).squeeze(1)
+    host_lengths=cpu_batch().length_mask.sum(1).tolist() if fast_structure() else None
+    groups=sorted(set(host_lengths)) if host_lengths is not None else torch.unique(valid_lengths,sorted=True)
+    for valid_length_tensor in groups:
+        valid_length = int(valid_length_tensor) if host_lengths is not None else int(valid_length_tensor.item())
+        batch_indices = (torch.tensor([i for i,n in enumerate(host_lengths) if n==valid_length],device=x_raw.device)
+            if host_lengths is not None else torch.nonzero(valid_lengths==valid_length_tensor,as_tuple=False).squeeze(1))
         group_input = x_raw.index_select(0, batch_indices)[:, None, :valid_length]
         # GN is sample-independent mathematically. Use identical trunk call
         # shapes for bit-stable FP32 features across batch compositions; some
@@ -130,7 +131,8 @@ def _encode_by_valid_length(
             device=x_raw.device,
             dtype=x_raw.dtype,
         )
-        for group_index, batch_index in enumerate(batch_indices.tolist()):
+        host_indices=[i for i,n in enumerate(host_lengths) if n==valid_length] if host_lengths is not None else batch_indices.tolist()
+        for group_index, batch_index in enumerate(host_indices):
             encoded_by_sample[batch_index] = group_features[group_index]
             centers_by_sample[batch_index] = centers
 

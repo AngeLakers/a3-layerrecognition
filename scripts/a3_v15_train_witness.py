@@ -25,6 +25,7 @@ def main():
     from a3_ultrasound.stream_training import catalog_signature
     from a3_ultrasound.training import ModelConfig,TrainingConfig,build_model,build_optimizer,TensorDataset,evaluate
     from a3_ultrasound.data.streaming import RFShardDataset
+    from a3_ultrasound.speed import dataset_from_config
     from a3_ultrasound.data.epoch_sampling import use_epoch
     from a3_ultrasound.prefix_perturbation import training_conditional
     from a3_ultrasound.models.losses import head_training_loss
@@ -38,9 +39,7 @@ def main():
         torch.use_deterministic_algorithms(True)
         torch.cuda.set_per_process_memory_fraction(min(1.,7*1024**3/torch.cuda.get_device_properties(0).total_memory))
     torch.set_num_threads(2)
-    ds=RFShardDataset(cfg['catalog'],cfg['folds'][0]['train'],training=True,seed=23,
-        physical_config=physical,tail_policy='nominal_fixed',window_policy=cfg.get('input_window_policy'),
-        timebase_config=load_timebase_artifact(cfg),window_jitter=cfg.get('window_jitter'))
+    ds=dataset_from_config(cfg,'train')
     sig=catalog_signature(ds.catalog);verify_panels(cfg,sig)
     hashes=[use_epoch(ds,cfg['epoch_selection_root'],e,seed=23,catalog_signature=sig) for e in range(1,41)]
     use_epoch(ds,cfg['epoch_selection_root'],1,seed=23,catalog_signature=sig)

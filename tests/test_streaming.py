@@ -62,19 +62,40 @@ def toy_catalog(tmp_path):
     return path
 
 
-def test_guarded_best_npz_and_summary_bind_config_and_commit_on_synthetic_data(toy_catalog,tmp_path):
+def test_guarded_best_npz_and_summary_bind_config_and_commit_on_synthetic_data(toy_catalog,tmp_path,monkeypatch):
     import hashlib
+    import a3_ultrasound.stream_training as runner
+    from a3_ultrasound.speed import SpeedOptions
     cfg=json.loads((Path(__file__).parents[1]/'configs/experiment/a3_13board_stream_v3.json').read_text(encoding='utf-8'))
     cfg.update(catalog=str(toy_catalog),folds=[dict(fold='F1',train=['AL'],validation=['TC'],test=['heldout'])],
         formal_training_permitted=True,outer_evaluation_permitted=False,frozen_selection_root=str(tmp_path),
         save_best_correction_npz=True)
+    cfg['speed']=dict(cpu_structure=True,cpu_correction=True,skip_minibatch_summary=True,validation_cache=True,tf32=True)
     cfg.pop('validation_selection_root',None)
     cfg['model'].update(backbone='tcn',rho=3.)
     cfg['training'].update(device='cpu',epochs=1,batch_size=4,selection_rule='guarded_joint',normal_fpr_limit=1.)
     data=RFShardDataset(toy_catalog,['AL'],training=True,seed=23)
     np.save(tmp_path/'F1_s23.npy',data.refs)
     path=tmp_path/'run.json';path.write_text(json.dumps(cfg));out=tmp_path/'run'
-    result=train(path,out,fold_name='F1',head='proposed',seed=23)
+    phases=[]
+    original=runner.evaluate_stream
+    def checked(*args,**kwargs):
+        if kwargs.get('phase') in ('validation','final_validation'):
+            assert kwargs['speed_options']==SpeedOptions(**cfg['speed'])
+            assert torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32
+            assert torch.backends.cudnn.deterministic and not torch.backends.cudnn.benchmark
+            assert torch.are_deterministic_algorithms_enabled()
+            phases.append(kwargs['phase'])
+        return original(*args,**kwargs)
+    monkeypatch.setattr(runner,'evaluate_stream',checked)
+    original_backend=(torch.backends.cuda.matmul.allow_tf32,torch.backends.cudnn.allow_tf32,
+        torch.backends.cudnn.deterministic,torch.backends.cudnn.benchmark,torch.are_deterministic_algorithms_enabled())
+    try:result=train(path,out,fold_name='F1',head='proposed',seed=23)
+    finally:
+        torch.backends.cuda.matmul.allow_tf32,torch.backends.cudnn.allow_tf32=original_backend[:2]
+        torch.backends.cudnn.deterministic,torch.backends.cudnn.benchmark=original_backend[2:4]
+        torch.use_deterministic_algorithms(original_backend[4])
+    assert phases==['validation','final_validation']
     expected=hashlib.sha256(path.read_bytes()).hexdigest()
     assert result['config_sha256']==expected and result['commit_hash']
     for kind in ('guarded','fallback'):
@@ -219,10 +240,11 @@ def test_formal_train_validation_and_separate_test_on_synthetic_fixture(toy_cata
         (selection_root/'manifest.json').write_text(json.dumps(manifest))
         cfg['validation_selection_root']=str(selection_root)
     path=tmp_path/'run.json';path.write_text(json.dumps(cfg))
-    opened=[];original=runner.RFShardDataset
+    import a3_ultrasound.data.streaming as loader
+    opened=[];original=loader.RFShardDataset
     def track(path,entities,**kwargs):
         opened.append(list(entities));return original(path,entities,**kwargs)
-    monkeypatch.setattr(runner,'RFShardDataset',track)
+    monkeypatch.setattr(loader,'RFShardDataset',track)
     result=runner.train(path,tmp_path/'train',fold_name='F1',head='proposed',seed=23)
     assert result['status']=='COMPLETED' and opened==[['AL'],['TC']]
     saved=__import__('torch').load(tmp_path/'train/epoch_01.pt',map_location='cpu',weights_only=True)

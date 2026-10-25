@@ -56,7 +56,8 @@ def audit_validation(config_path, run_directory, output, *, queue_state=None):
         raise ValueError('Unregistered checkpoint seed or Head.')
     if asdict(ModelConfig(**dict(cfg['model'], head_type=head))) != resolved['model']:
         raise ValueError('Checkpoint model differs from active configuration.')
-    data = RFShardDataset(cfg['catalog'], fold['validation'])
+    from a3_ultrasound.speed import dataset_from_config
+    data=dataset_from_config(dict(cfg,fold_name=fold['fold'],seed=resolved['seed'],validation_selection_root=None),'validation')
     if data.evaluation_weights is not None or set(data.entities) & (set(fold['train']) | set(fold['test'])):
         raise ValueError('Audit must use full independent validation with unit weights.')
     sampling = resolved.get('validation_sampling')

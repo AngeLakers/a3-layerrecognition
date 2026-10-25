@@ -85,7 +85,10 @@ def child(root,job):
             train(root/'stage2_config.json',out,fold_name='F1',seed=23,head=m['jobs'][job]['head'])
         atomic_json(out/'execution_witness.json',dict(job=job,manifest_sha256=file_digest(root/'manifest.json'),
             peak_allocated_mib=torch.cuda.max_memory_allocated()/2**20,peak_reserved_mib=torch.cuda.max_memory_reserved()/2**20,
-            gpu=torch.cuda.get_device_name(0),deterministic=True,tf32=False,formal_result=False,outer_opened=False))
+            gpu=torch.cuda.get_device_name(0),deterministic=torch.are_deterministic_algorithms_enabled(),
+            tf32=torch.backends.cuda.matmul.allow_tf32,tf32_cudnn=torch.backends.cudnn.allow_tf32,
+            cudnn_benchmark=torch.backends.cudnn.benchmark,cudnn_deterministic=torch.backends.cudnn.deterministic,
+            formal_result=False,outer_opened=False))
     except Exception as exc:
         atomic_json(session/'failure.json',dict(type=type(exc).__name__,message=str(exc)));raise
 

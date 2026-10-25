@@ -86,3 +86,12 @@ class InterfaceBatch:
     @property
     def valid_interface_counts(self) -> Tensor:
         return self.interface_mask.sum(dim=1)
+
+    def pin_memory(self):
+        """DataLoader custom-batch hook; CPU validation precedes H2D."""
+        from dataclasses import fields
+        result=object.__new__(type(self))
+        for field in fields(self):
+            value=getattr(self,field.name)
+            object.__setattr__(result,field.name,None if value is None else value.pin_memory())
+        return result

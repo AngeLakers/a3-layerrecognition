@@ -11,10 +11,13 @@ HEADS=('local_independent','local_pre_independent','vanilla_chain','proposed_v15
 def validate_config(cfg,*,fold_name,seed,head,require_permission=True):
     t,m=cfg['training'],cfg['model']
     execution = cfg.get('execution_version', 'v1.5-freeze')
-    if (execution not in ('v1.5-freeze', 'v1.5.1', 'v1.5.2')
+    if execution=='v1.5.3':
+        from a3_ultrasound.v153_protocol import validate_speed_config
+        validate_speed_config(cfg)
+    if (execution not in ('v1.5-freeze', 'v1.5.1', 'v1.5.2', 'v1.5.3')
             or m.get('canonical_per_trace', True) is not (execution == 'v1.5-freeze')):
         raise ValueError('Backbone execution mode differs from the declared V1.5 version.')
-    if execution == 'v1.5.2':
+    if execution in ('v1.5.2','v1.5.3'):
         if (cfg.get('input_window_policy') != {'name': 'board_timebase', 'halfwidth_samples': 80}
                 or m.get('local_prior_sigma_samples') != 40.0
                 or m.get('local_prior_strength') != 0.5
@@ -65,7 +68,7 @@ def load_physical_artifacts(cfg):
     stats=values['physical_statistics'];decision=values['m6_decision']
     if stats.get('input_window_policy') != cfg.get('input_window_policy'):
         raise ValueError('Physical statistics were fitted with a different window policy.')
-    if (cfg.get('execution_version')=='v1.5.2'
+    if (cfg.get('execution_version') in ('v1.5.2','v1.5.3')
             and stats.get('timebase_calibration_sha256')!=cfg.get('timebase_calibration_sha256')):
         raise ValueError('Physical statistics were fitted with a different timebase artifact.')
     if (stats.get('front_end_samples')!=180 or stats.get('epsilon')!=1e-8
@@ -89,7 +92,7 @@ def load_physical_artifacts(cfg):
 
 
 def load_timebase_artifact(cfg):
-    if cfg.get('execution_version')!='v1.5.2':return None
+    if cfg.get('execution_version') not in ('v1.5.2','v1.5.3'):return None
     raw=Path(cfg['timebase_calibration_path']).read_bytes()
     digest=hashlib.sha256(raw).hexdigest()
     if digest!=cfg['timebase_calibration_sha256']:
@@ -109,8 +112,12 @@ def copy_runtime_artifacts(cfg,output):
         if hashlib.sha256(raw).hexdigest()!=cfg[key+'_sha256']:
             raise ValueError(key+' artifact changed.')
         atomic_write(Path(output)/name,lambda handle:handle.write(raw))
-    if cfg.get('execution_version')=='v1.5.2':
+    if cfg.get('execution_version') in ('v1.5.2','v1.5.3'):
         raw=Path(cfg['timebase_calibration_path']).read_bytes()
         if hashlib.sha256(raw).hexdigest()!=cfg['timebase_calibration_sha256']:
             raise ValueError('Timebase artifact changed.')
         atomic_write(Path(output)/'timebase_calibration.json',lambda handle:handle.write(raw))
+    if cfg.get('execution_version')=='v1.5.3':
+        from a3_ultrasound.v153_protocol import verify_speed_decision
+        verify_speed_decision(cfg)
+        atomic_write(Path(output)/'speed_decision.json',lambda handle:handle.write(Path(cfg['speed_decision_path']).read_bytes()))

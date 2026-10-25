@@ -17,6 +17,7 @@ from a3_ultrasound.validation_diagnostics import CorrectionArchive
 from a3_ultrasound.freeze_protocol import PROTOCOL as FREEZE_PROTOCOL,validate_freeze_config,verify_panels,commit_identity
 from a3_ultrasound.v15_protocol import PROTOCOL as V15_PROTOCOL,validate_config as validate_v15_config,load_physical_artifacts,copy_runtime_artifacts
 from a3_ultrasound.v15_protocol import load_timebase_artifact
+from a3_ultrasound.speed import SpeedOptions,dataset_from_config,speed_context,precision_context,configure_backend,configure_model,finish_step
 
 
 def save(path,data):path.write_text(json.dumps(data,ensure_ascii=False,indent=2,allow_nan=False)+'\n',encoding='utf-8')
@@ -36,7 +37,7 @@ def catalog_signature(catalog):
     return hashlib.sha256(json.dumps(data,sort_keys=True,ensure_ascii=False).encode('utf-8')).hexdigest()
 
 
-def evaluate_stream(model,data,*,batch_size,device,prediction_path=None,progress_path=None,phase='evaluation',epoch=None,correction_archive=None):
+def evaluate_stream(model,data,*,batch_size,device,prediction_path=None,progress_path=None,phase='evaluation',epoch=None,correction_archive=None,speed_options=None):
     primary=PredictionAccumulator();nominal=PredictionAccumulator();quality=PredictionAccumulator()
     per_specimen=defaultdict(PredictionAccumulator);per_material=defaultdict(PredictionAccumulator)
     materials={s['entity']:('AL' if s['group']=='AL' else 'TC4') for s in data.shards}
@@ -46,7 +47,7 @@ def evaluate_stream(model,data,*,batch_size,device,prediction_path=None,progress
         for batch,indices in data.batches(batch_size,device):
             names=[data.identity(i) for i in indices]
             small=TensorDataset(batch,tuple(n[0] for n in names),tuple(n[1] for n in names))
-            _,rows=evaluate(model,small,batch_size=len(indices),device=device)
+            _,rows=evaluate(model,small,batch_size=len(indices),device=device,speed_options=speed_options)
             for row,annotation in zip(rows,data.annotations(indices)):
                 row.update(annotation);primary.add(row)
                 per_specimen[row['specimen_id']].add(row)
@@ -122,36 +123,25 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
     random.seed(seed);np.random.seed(seed);torch.manual_seed(seed);torch.set_num_threads(2)
     if torch.cuda.is_available():torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.benchmark=False;torch.backends.cudnn.deterministic=True
-    training=RFShardDataset(catalog_path,fold['train'],training=True,seed=seed,
-        normal_ratio=cfg['normal_to_positive'],
-        diagnostic_per_class=cfg['diagnostic']['per_entity_per_class'] if diagnostic else None,
-        physical_config=physical,tail_policy=cfg.get('input_tail_policy'),
-        window_policy=cfg.get('input_window_policy'),timebase_config=timebase,
-        window_jitter=cfg.get('window_jitter'))
+    speed=SpeedOptions(**cfg.get('speed',{}));runtime_cfg=dict(cfg,fold_name=fold_name,seed=seed)
+    if speed.tf32 or speed.bf16_autocast or speed.cudnn_benchmark:configure_backend(speed)
+    if speed.batch_size is not None:tc=TrainingConfig(**dict(asdict(tc),batch_size=speed.batch_size))
+    training=dataset_from_config(runtime_cfg,'diagnostic' if diagnostic else 'train')
     if not diagnostic and not cfg.get('epoch_selection_root'):
         selection=Path(cfg['frozen_selection_root'])/f'{fold_name}_s{seed}.npy'
         if not np.array_equal(training.refs,np.load(selection,allow_pickle=False)):
             raise ValueError('Training selection differs from frozen specimen/seed indices.')
     # Diagnostic never opens outer validation or test RF. Formal uses validation only.
-    validation=None if diagnostic else RFShardDataset(catalog_path,fold['validation'],
-        physical_config=physical,tail_policy=cfg.get('input_tail_policy'),
-        window_policy=cfg.get('input_window_policy'),timebase_config=timebase)
+    validation=None if diagnostic else dataset_from_config(runtime_cfg,'validation')
     validation_sampling=None
     if validation is not None and cfg.get('validation_selection_root'):
-        selection_root=Path(cfg['validation_selection_root'])
-        selection_manifest=json.loads((selection_root/'manifest.json').read_text(encoding='utf-8'))
-        selection_path=selection_root/f'{fold_name}.npz'
-        selection_sha=hashlib.sha256(selection_path.read_bytes()).hexdigest()
-        if selection_manifest['catalog_signature']!=catalog_signature(catalog) or selection_manifest['folds'][fold_name]['sha256']!=selection_sha:
-            raise ValueError('Frozen validation selection or catalog signature mismatch.')
-        population=len(validation);validation.use_frozen_evaluation_selection(selection_path)
         if frozen and len(validation)!=40002:raise ValueError('Frozen validation must retain 40,002 input rows.')
-        validation_sampling=dict(policy=selection_manifest['policy'],selection_sha256=selection_sha,
-            evaluated_records=len(validation),population_records=population,seed=selection_manifest['seed'])
+        validation_sampling=validation.validation_sampling
     if cfg.get('epoch_selection_root'):
         use_epoch(training,cfg['epoch_selection_root'],1,seed=seed,catalog_signature=catalog_signature(catalog))
         if frozen and len(training)!=100732:raise ValueError('Frozen F1 must use all positives and 100,732 training rows per epoch.')
-    model=build_model(model_config).to(tc.device);optimizer,counts=build_optimizer(model,tc)
+    model=build_model(model_config).to(tc.device);configure_model(model,speed)
+    optimizer,counts=build_optimizer(model,tc,fused=speed.fused_adam)
     output=Path(output);output.mkdir(parents=True,exist_ok=False);started=time.perf_counter()
     np.save(output/'training_selection.npy',training.refs)
     resolved={'model':asdict(model_config),'training':asdict(tc),'fold':fold,'input_config':training.config,
@@ -196,25 +186,39 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
             epoch_sha=None
             if cfg.get('epoch_selection_root'):
                 epoch_sha=use_epoch(training,cfg['epoch_selection_root'],epoch,seed=seed,catalog_signature=catalog_signature(catalog))
-            model.train();total=0.;seen=0
+            model.train();total=0.;seen=0;deferred_losses=[]
             perturbation=dict(attempted=0,changed=0,eligible=0)
             perturbation_hash=hashlib.sha256()
             progress(output/'progress.json',phase='training',epoch=epoch,records=0,total_records=len(training),updates_total=updates)
             for step,(batch,ids) in enumerate(training.batches(tc.batch_size,tc.device,generator=None if cfg.get('epoch_selection_root') else generator)):
                 optimizer.zero_grad(set_to_none=True)
-                out,attempt=training_conditional(model,batch,probability=tc.prefix_replacement_probability,
-                    seed=seed,epoch=epoch,step=step)
+                scope=speed_context(speed,batch,training=True)
+                with scope:
+                    with precision_context(speed):
+                        out,attempt=training_conditional(model,batch,probability=tc.prefix_replacement_probability,
+                            seed=seed,epoch=epoch,step=step)
+                    with torch.autocast(batch.x_raw.device.type,enabled=False):
+                        loss=head_training_loss(out,batch,head_type=head,lambda_local=tc.lambda_local,
+                            positive_class_weight=tc.positive_class_weight,disable_local_auxiliary=tc.disable_local_auxiliary,
+                            local_aux_mode=tc.local_aux_mode)
+                    if speed.coalesced_finite:
+                        loss.total.backward();finish_step(model,loss.total)
+                    else:
+                        if not torch.isfinite(loss.total):raise RuntimeError('Nonfinite loss.')
+                        loss.total.backward()
+                        if any(p.grad is not None and not torch.isfinite(p.grad).all() for p in model.parameters()):raise RuntimeError('Nonfinite gradient.')
                 for name in perturbation:perturbation[name]+=attempt[name]
                 if attempt['attempt_mask_sha256']:perturbation_hash.update(attempt['attempt_mask_sha256'].encode('ascii'))
-                loss=head_training_loss(out,batch,head_type=head,lambda_local=tc.lambda_local,
-                    positive_class_weight=tc.positive_class_weight,disable_local_auxiliary=tc.disable_local_auxiliary,
-                    local_aux_mode=tc.local_aux_mode)
-                if not torch.isfinite(loss.total):raise RuntimeError('Nonfinite loss.')
-                loss.total.backward()
-                if any(p.grad is not None and not torch.isfinite(p.grad).all() for p in model.parameters()):raise RuntimeError('Nonfinite gradient.')
-                optimizer.step();total+=float(loss.total.detach())*len(ids);seen+=len(ids);updates+=1
+                optimizer.step()
+                if speed.coalesced_finite:deferred_losses.append((loss.total.detach(),len(ids)))
+                else:total+=float(loss.total.detach())*len(ids)
+                seen+=len(ids);updates+=1
                 if updates%100==0 or seen==len(training):
                     progress(output/'progress.json',phase='training',epoch=epoch,records=seen,total_records=len(training),updates_total=updates)
+            if deferred_losses:
+                values=torch.stack([p[0] for p in deferred_losses]).cpu().tolist()
+                for value,(_,weight) in zip(values,deferred_losses):total+=value*weight
+            perturbation={k:int(v) for k,v in perturbation.items()}
             record={'epoch':epoch,'train_loss':total/seen,'records':seen,'updates_total':updates}
             if tc.prefix_replacement_probability:
                 record['prefix_perturbation']=dict(perturbation,attempt_sequence_sha256=perturbation_hash.hexdigest())
@@ -222,7 +226,7 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
                 correction_archive=CorrectionArchive() if head in ('proposed','proposed_v15') and cfg.get('save_best_correction_npz') else None
                 progress(output/'progress.json',phase='validation',epoch=epoch,records=0,total_records=len(validation))
                 metrics=evaluate_stream(model,validation,batch_size=evaluation_batch_size,device=tc.device,
-                    progress_path=output/'progress.json',phase='validation',epoch=epoch,correction_archive=correction_archive)
+                    progress_path=output/'progress.json',phase='validation',epoch=epoch,correction_archive=correction_archive,speed_options=speed)
                 score=metrics['reliable'];key=(score['deepest_specimen_macro_f1'],-score['joint_nll'] if score['joint_nll'] is not None else -float('inf'))
                 if key[0] is None:raise RuntimeError('Validation has no reliable deepest labels.')
                 record['validation']=metrics
@@ -270,7 +274,7 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
         checkpoint=torch.load(output/selected_name,map_location=tc.device,weights_only=True);model.load_state_dict(checkpoint['model_state_dict'])
         target=training if diagnostic else validation
         final=evaluate_stream(model,target,batch_size=evaluation_batch_size,device=tc.device,prediction_path=output/'predictions.jsonl',
-            progress_path=output/'progress.json',phase='final_validation',epoch=checkpoint['epoch'])
+            progress_path=output/'progress.json',phase='final_validation',epoch=checkpoint['epoch'],speed_options=speed)
         result={'status':'COMPLETED','diagnostic':diagnostic,'updates':updates,'epochs':len(history),'best_epoch':checkpoint['epoch'],
             'seconds':time.perf_counter()-started,'selection_counts':training.selection_summary(),'metrics':final,
             'test_opened':False,'performance_claims_released':False,'old_weights_reused':False}
@@ -322,7 +326,7 @@ def test_checkpoint(config_path,checkpoint_path,output):
         raise ValueError('Checkpoint training protocol differs from frozen phase.')
     if resolved['seed'] not in cfg['seeds'] or resolved['model']['head_type'] not in cfg['heads']:
         raise ValueError('Checkpoint seed or Head is not registered.')
-    data=RFShardDataset(cfg['catalog'],fold['test'])
+    data=dataset_from_config(dict(cfg,fold_name=fold['fold'],seed=resolved['seed']),'test')
     if set(data.entities)&set(resolved['selection_entities']):raise ValueError('Test entity leakage.')
     model=build_model(ModelConfig(**resolved['model'])).to(cfg['training']['device']);model.load_state_dict(c['model_state_dict'])
     output=Path(output);output.mkdir(parents=True,exist_ok=False)

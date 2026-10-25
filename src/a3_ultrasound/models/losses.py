@@ -11,6 +11,7 @@ from torch.nn import functional as F
 
 from a3_ultrasound.models.pcc import HeadStepOutput, validate_prefix_states
 from a3_ultrasound.schema import InterfaceBatch
+from a3_ultrasound.speed import complete_training,fast_structure,finite_tensor
 
 
 @dataclass(frozen=True)
@@ -55,22 +56,23 @@ def pcc_training_loss(
     if label_mask is not None:
         if label_mask.shape != expected_shape or label_mask.dtype != torch.bool:
             raise ValueError("label_mask must be bool with shape [B, Kmax].")
-        if torch.any(label_mask & ~interface_mask):
+        if not fast_structure() and torch.any(label_mask & ~interface_mask):
             raise ValueError("label_mask cannot supervise padded interface slots.")
         supervision_mask = interface_mask & label_mask
     else:
         supervision_mask = interface_mask
 
-    if torch.any(interface_mask.sum(dim=1) == 0):
+    if not fast_structure() and torch.any(interface_mask.sum(dim=1) == 0):
         raise ValueError("Every loss sample must contain at least one valid interface.")
-    supervised_values = y[supervision_mask]
-    if supervised_values.numel() == 0:
-        raise ValueError("At least one interface label is required for PCC loss.")
-    if torch.any((supervised_values != 0) & (supervised_values != 1)):
-        raise ValueError("Supervised y values must use good=0/abnormal=1.")
-    if not torch.isfinite(conditional_logits[interface_mask]).all() or not torch.isfinite(
-        base_logodds[interface_mask]
-    ).all():
+    if not complete_training():
+        supervised_values = y[supervision_mask]
+        if supervised_values.numel() == 0:
+            raise ValueError("At least one interface label is required for PCC loss.")
+        if torch.any((supervised_values != 0) & (supervised_values != 1)):
+            raise ValueError("Supervised y values must use good=0/abnormal=1.")
+    if fast_structure():
+        finite_tensor(conditional_logits,interface_mask);finite_tensor(base_logodds,interface_mask)
+    elif not torch.isfinite(conditional_logits[interface_mask]).all() or not torch.isfinite(base_logodds[interface_mask]).all():
         raise ValueError("Valid PCC logits must be finite.")
 
     try:
@@ -121,9 +123,9 @@ def pcc_training_loss(
         local_mask = supervision_mask & ~upstream_bad & ~upstream_unknown
     local_counts = local_mask.sum(1).clamp_min(1).to(conditional_logits.dtype)
     per_sample_local = (local_terms * local_mask).sum(dim=1) / local_counts
-    chain = per_sample_chain[supervised_sample_mask].mean()
+    chain = per_sample_chain.mean() if complete_training() else per_sample_chain[supervised_sample_mask].mean()
     local_samples = local_mask.any(1)
-    local = per_sample_local[local_samples].mean() if local_samples.any() else per_sample_local.sum() * 0.0
+    local = per_sample_local.mean() if complete_training() else (per_sample_local[local_samples].mean() if local_samples.any() else per_sample_local.sum() * 0.0)
     total = chain + resolved_lambda * local
     return PCCLossOutput(
         total=total,
@@ -139,7 +141,7 @@ def validate_complete_training_batch(batch: InterfaceBatch) -> None:
     """The common four-Head main-training cohort requires all valid labels."""
     if batch.y is None:
         raise ValueError("Main training requires complete reliable labels (y).")
-    if batch.label_mask is not None and not torch.equal(batch.label_mask, batch.interface_mask):
+    if not fast_structure() and batch.label_mask is not None and not torch.equal(batch.label_mask, batch.interface_mask):
         raise ValueError("Main training requires complete label_mask coverage of all valid interfaces.")
     validate_prefix_states(batch.y, batch.interface_mask)
 

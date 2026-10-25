@@ -150,7 +150,7 @@ def audit_splits(datasets: dict[str, TensorDataset]) -> dict[str, Any]:
             for name, data in datasets.items()}
 
 
-def build_optimizer(model: A3Model, config: TrainingConfig) -> tuple[torch.optim.Optimizer, dict[str, int]]:
+def build_optimizer(model: A3Model, config: TrainingConfig, *, fused: bool = False) -> tuple[torch.optim.Optimizer, dict[str, int]]:
     """Cover each trainable parameter once, including adapter/readouts/new Head."""
     groups = []
     counts = {}
@@ -164,7 +164,8 @@ def build_optimizer(model: A3Model, config: TrainingConfig) -> tuple[torch.optim
     expected = {id(parameter) for parameter in model.parameters() if parameter.requires_grad}
     if set(parameter_ids) != expected or len(parameter_ids) != len(expected):
         raise RuntimeError("Optimizer groups must cover every trainable parameter exactly once.")
-    return torch.optim.AdamW(groups, lr=config.learning_rate, weight_decay=config.weight_decay), counts
+    kwargs={'fused':True} if fused else {}
+    return torch.optim.AdamW(groups, lr=config.learning_rate, weight_decay=config.weight_decay,**kwargs), counts
 
 
 def _binary_metrics(truth: list[int], prediction: list[int], probabilities: list[float]) -> dict[str, Any]:
@@ -247,7 +248,7 @@ def summarize_predictions(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 @torch.no_grad()
 def evaluate(model: A3Model, data: TensorDataset, *, batch_size: int = 16,
-             device: str = "cpu") -> tuple[dict[str, Any], list[dict[str, Any]]]:
+             device: str = "cpu", speed_options=None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """All predictions use exact inference. Labels are consulted only for metrics."""
     if type(batch_size) is not int or batch_size < 1:
         raise ValueError("batch_size must be a positive integer.")
@@ -255,12 +256,16 @@ def evaluate(model: A3Model, data: TensorDataset, *, batch_size: int = 16,
     model.eval()
     rows = []
     try:
-        for batch, indices in data.batches(batch_size, device):
-            encoded = model.encode(batch)
-            exact = model.infer_encoded(encoded)
-            # MAP-path correction is a prediction-side diagnostic, not truth forcing.
-            diagnostic = model.conditional(encoded, exact.map_states)
-            if batch.label_mask is not None and torch.any(batch.label_mask & ~batch.interface_mask):
+        from a3_ultrasound.speed import speed_context,precision_context
+        optimized=speed_options is not None and speed_options.cpu_structure
+        batches=[(data.batch,list(range(len(data.sample_ids))))] if optimized and batch_size>=len(data.sample_ids) else data.batches(batch_size,device)
+        for batch, indices in batches:
+            with speed_context(speed_options,batch):
+                with precision_context(speed_options):encoded = model.encode(batch)
+                exact = model.infer_encoded(encoded)
+                # MAP-path correction is a prediction-side diagnostic, not truth forcing.
+                diagnostic = model.conditional(encoded, exact.map_states)
+            if not optimized and batch.label_mask is not None and torch.any(batch.label_mask & ~batch.interface_mask):
                 raise ValueError("label_mask cannot supervise padded interfaces.")
             # Copy each field once per batch instead of synchronizing the GPU
             # for every scalar/row. GPU arithmetic and row order stay unchanged.
@@ -307,13 +312,14 @@ def evaluate(model: A3Model, data: TensorDataset, *, batch_size: int = 16,
                     "gate_times_correction": values(gate_correction) if gate_correction is not None else None,
                 }
                 if diagnostic.correction is not None:
-                    eligible = diagnostic.correction[i, 1:k]
+                    eligible = (cpu_fields[id(diagnostic.correction)] if speed_options is not None and speed_options.cpu_correction else diagnostic.correction)[i, 1:k]
                     row["correction_saturation_fraction"] = (float((eligible.abs() >= 0.95 * model.head.rho).float().mean())
                                                              if eligible.numel() else None)
                 if diagnostic.upstream_flag is not None:
                     row['upstream_flag'] = values(diagnostic.upstream_flag)
                     row['gate_times_raw_correction'] = values(raw_gate_correction)
                 rows.append(row)
+        if speed_options is not None and speed_options.skip_minibatch_summary:return {},rows
         metrics=summarize_predictions(rows)
         accumulator=PredictionAccumulator()
         for row in rows:accumulator.add(row)
@@ -345,7 +351,8 @@ def _code_version() -> dict[str, Any]:
         revision = repository / 'SOURCE_REVISION.json'
         if revision.is_file():
             value = json.loads(revision.read_text(encoding='utf-8'))
-            return {"commit": value.get("commit"), "dirty": False, "status": "frozen SOURCE_REVISION metadata"}
+            return {"commit": value.get("commit"), "dirty": bool(value.get("dirty",False)),
+                    "status": "uncommitted source snapshot metadata" if value.get("dirty",False) else "frozen SOURCE_REVISION metadata"}
         return {"commit": None, "dirty": None, "status": "git unavailable"}
 
 

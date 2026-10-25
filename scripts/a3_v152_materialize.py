@@ -1,4 +1,4 @@
-"""Bind the frozen V1.5.2 template to existing data without enabling training."""
+"""Bind a frozen V1.5.2/V1.5.3 template without enabling training."""
 from pathlib import Path
 import argparse,hashlib,json,re,sys
 
@@ -12,12 +12,13 @@ def main():
     from a3_ultrasound.freeze_protocol import verify_panels
     from a3_ultrasound.v15_protocol import validate_config,load_timebase_artifact,load_physical_artifacts
     cfg=json.loads(a.template.read_text(encoding='utf-8'))
-    if cfg.get('execution_version')!='v1.5.2' or cfg.get('freeze_training_permitted') is not False:
-        raise ValueError('Expected a stopped V1.5.2 template.')
+    if cfg.get('execution_version') not in ('v1.5.2','v1.5.3') or cfg.get('freeze_training_permitted') is not False:
+        raise ValueError('Expected a stopped V1.5.2/V1.5.3 template.')
     if not re.fullmatch('[0-9a-f]{40}',a.source_commit):raise ValueError('Exact source commit required.')
     cfg.update(catalog=str(a.catalog.resolve()),epoch_selection_root=str(a.epoch_root.resolve()),
         validation_selection_root=str(a.validation_root.resolve()),source_commit=a.source_commit,freeze_training_permitted=False)
-    for name in ('timebase_calibration','physical_statistics','m6_decision'):
+    names=('timebase_calibration','physical_statistics','m6_decision')+(('speed_decision',) if cfg['execution_version']=='v1.5.3' else ())
+    for name in names:
         path=Path(cfg[name+'_path']);path=path if path.is_absolute() else root/path
         if hashlib.sha256(path.read_bytes()).hexdigest()!=cfg[name+'_sha256']:raise ValueError(name+' checksum mismatch')
         cfg[name+'_path']=str(path.resolve())

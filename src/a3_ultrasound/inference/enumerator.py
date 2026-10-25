@@ -8,6 +8,7 @@ from typing import Protocol
 import torch
 from torch import Tensor
 from torch.nn import functional as F
+from a3_ultrasound.speed import fast_structure,cpu_batch
 
 
 class ConditionalLogitOutput(Protocol):
@@ -72,15 +73,16 @@ def enumerate_binary_chain(
         raise ValueError("PCC tensors must agree with interface_mask on [B, Kmax].")
 
     counts = interface_mask.sum(dim=1)
-    if torch.any(counts == 0):
+    if not fast_structure() and torch.any(counts == 0):
         raise ValueError("Every enumerated sample must contain at least one valid interface.")
     expected_mask = (
         torch.arange(kmax, device=interface_mask.device).unsqueeze(0)
         < counts.unsqueeze(1)
     )
-    if not torch.equal(interface_mask, expected_mask):
+    if not fast_structure() and not torch.equal(interface_mask, expected_mask):
         raise ValueError("interface_mask must describe one contiguous ordered prefix.")
-    max_paths = 2 ** int(counts.max().item())
+    host_counts=cpu_batch().interface_mask.sum(1).tolist() if fast_structure() else None
+    max_paths = 2 ** (max(host_counts) if host_counts is not None else int(counts.max().item()))
     device = r_loc.device
     states = torch.full((batch_size, max_paths, kmax), -1, device=device, dtype=torch.long)
     path_mask = torch.zeros((batch_size, max_paths), device=device, dtype=torch.bool)
@@ -94,8 +96,9 @@ def enumerate_binary_chain(
 
     # Equal-K samples share the same path lattice. Fold sample and path axes
     # into the Head's batch axis; no reduction ever crosses sample boundaries.
-    for interface_count in sorted(set(counts.cpu().tolist())):
-        batch_indices = torch.nonzero(counts == interface_count, as_tuple=False).squeeze(1)
+    for interface_count in sorted(set(host_counts if host_counts is not None else counts.cpu().tolist())):
+        batch_indices = (torch.tensor([i for i,k in enumerate(host_counts) if k==interface_count],device=device)
+            if host_counts is not None else torch.nonzero(counts==interface_count,as_tuple=False).squeeze(1))
         group_size = batch_indices.numel()
         paths = lexicographic_binary_paths(interface_count, device=device)
         path_count = paths.shape[0]

@@ -7,6 +7,7 @@ import math
 
 import torch
 from torch import Tensor, nn
+from a3_ultrasound.speed import fast_structure,cpu_batch,options
 
 
 @dataclass(frozen=True)
@@ -147,7 +148,10 @@ def summarize_local_tokens(
     if interface_mask.shape != local_support.shape[:2] or interface_mask.dtype != torch.bool:
         raise ValueError("interface_mask must be bool with shape [B, Kmax].")
     counts = local_support.sum(dim=-1)
-    valid_counts = counts[interface_mask]
+    if fast_structure():
+        indices=torch.nonzero(cpu_batch().interface_mask.flatten(),as_tuple=False).squeeze(1).to(counts.device)
+        valid_counts=counts.flatten().index_select(0,indices)
+    else:valid_counts = counts[interface_mask]
     if valid_counts.numel() == 0:
         raise ValueError("Local token diagnostics require at least one valid interface.")
     values = valid_counts.to(dtype=torch.float32)
@@ -228,7 +232,7 @@ class IndexedReadout(nn.Module):
 
         valid = support_mask & interface_mask.unsqueeze(-1)
         has_support = valid.any(dim=-1)
-        if not allow_empty_context and torch.any(interface_mask & ~has_support):
+        if not fast_structure() and not allow_empty_context and torch.any(interface_mask & ~has_support):
             raise ValueError("An effective Local support is empty; check TOF/stride contract.")
 
         hidden = self.feature_projection(features).unsqueeze(1) + self.score_bias
@@ -237,6 +241,8 @@ class IndexedReadout(nn.Module):
             hidden = hidden + self.query_projection(query).unsqueeze(2)
         scores = self.score_projection(torch.tanh(hidden)).squeeze(-1)
         if local_prior is not None and self.prior_strength != 0:
+            # BF16 epsilon would floor the frozen Gaussian into a different prior.
+            if options().bf16_autocast:scores=scores.float();local_prior=local_prior.float()
             eps = torch.finfo(scores.dtype).eps
             scores = scores + self.prior_strength * torch.log(local_prior.clamp_min(eps))
         masked_scores = scores.masked_fill(~valid, float("-inf"))

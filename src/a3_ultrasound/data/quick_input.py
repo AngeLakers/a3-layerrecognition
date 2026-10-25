@@ -39,7 +39,7 @@ def physical_manifest(row: dict, config: dict) -> dict:
 
 
 def transform_trace(trace: np.ndarray, row: dict, config: dict, *, timebase=None,
-                    window_shift=0.) -> tuple[np.ndarray, np.ndarray, dict]:
+                    window_shift=0., skip_nominal_diagnostics=False) -> tuple[np.ndarray, np.ndarray, dict]:
     """Apply the versioned tail-retention rule, then one fixed scaling.
 
     V3 scans all later activity; the historical boundary-only rule remains
@@ -76,10 +76,10 @@ def transform_trace(trace: np.ndarray, row: dict, config: dict, *, timebase=None
     stop = min(len(trace), proposed)
     check = int(tail['active_boundary_check_samples'])
     quiet_run = int(tail['quiet_run_samples'])
-    baseline = float(np.median(trace[:min(16,len(trace))]))
+    baseline = 0. if policy=='nominal_fixed' and skip_nominal_diagnostics else float(np.median(trace[:min(16,len(trace))]))
     threshold = float(tail['quiet_floor_raw_units'])
-    deviation = np.abs(trace.astype(float)-baseline)
-    active = stop < len(trace) and bool(np.any(deviation[max(0,stop-check):stop] > threshold))
+    deviation = None if policy=='nominal_fixed' and skip_nominal_diagnostics else np.abs(trace.astype(float)-baseline)
+    active = deviation is not None and stop < len(trace) and bool(np.any(deviation[max(0,stop-check):stop] > threshold))
     if policy=='nominal_fixed':
         pass
     elif policy=='last_active_tail':

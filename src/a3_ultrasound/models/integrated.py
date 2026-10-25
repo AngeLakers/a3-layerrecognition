@@ -1,6 +1,7 @@
 """Shared frontend and replaceable conditional heads for A3 V1.3."""
 
 from __future__ import annotations
+from a3_ultrasound.speed import fast_structure,options
 
 from dataclasses import dataclass
 from typing import Literal
@@ -266,12 +267,17 @@ class A3PCCModel(nn.Module):
     def conditional(self, encoded: EncodedInterfaces, prefix_states: Tensor) -> HeadStepOutput:
         validate_prefix_states(prefix_states, encoded.interface_mask)
         tokens = encoded.responsibility_tokens
-        return self.head(tokens.r_loc, tokens.r_ctx, tokens.r_gate, encoded.query,
-                         prefix_states, encoded.interface_mask)
+        if options().bf16_autocast:
+            with torch.autocast(encoded.query.device.type,enabled=False):
+                return self.head(tokens.r_loc.float(),tokens.r_ctx.float(),tokens.r_gate.float(),encoded.query.float(),prefix_states,encoded.interface_mask)
+        return self.head(tokens.r_loc, tokens.r_ctx, tokens.r_gate, encoded.query,prefix_states, encoded.interface_mask)
 
     def infer_encoded(self, encoded: EncodedInterfaces) -> ExactInferenceOutput:
         """Enumerate the selected Head without re-encoding the waveform."""
         tokens = encoded.responsibility_tokens
+        if options().bf16_autocast:
+            with torch.autocast(encoded.query.device.type,enabled=False):
+                return enumerate_pcc(self.head,tokens.r_loc.float(),tokens.r_ctx.float(),tokens.r_gate.float(),encoded.query.float(),encoded.interface_mask)
         return enumerate_pcc(self.head, tokens.r_loc, tokens.r_ctx, tokens.r_gate,
                              encoded.query, encoded.interface_mask)
 
@@ -289,6 +295,7 @@ class A3PCCModel(nn.Module):
             raise ValueError(
                 f"Kmax={kmax} exceeds the configured boundary of {self.max_interfaces}."
             )
+        if fast_structure():return
         valid_counts = batch.interface_mask.sum(dim=1)
         if batch_size == 0 or torch.any(valid_counts == 0):
             raise ValueError("Every sample must have at least one valid interface.")
@@ -318,7 +325,7 @@ class A3PCCModel(nn.Module):
             | (window_end > last_sample + 1e-4)
             | (window_start > window_end)
         )
-        if torch.any(valid & invalid_window):
+        if not fast_structure() and torch.any(valid & invalid_window):
             raise ValueError(
                 "Every valid interface window must lie inside its trace and have start <= end."
             )

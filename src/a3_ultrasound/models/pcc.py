@@ -8,6 +8,7 @@ from typing import Literal
 
 import torch
 from torch import Tensor, nn
+from a3_ultrasound.speed import fast_structure
 
 
 LocalBaseType = Literal["linear", "mlp"]
@@ -37,9 +38,10 @@ def validate_prefix_states(prefix_states: Tensor, interface_mask: Tensor) -> Ten
         raise ValueError("prefix_states and interface_mask must share a device.")
     if prefix_states.dtype not in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8, torch.bool):
         raise ValueError("prefix_states must be integer binary states on valid slots.")
-    valid_states = prefix_states[interface_mask]
-    if torch.any((valid_states != 0) & (valid_states != 1)):
-        raise ValueError("prefix_states must be binary on valid interface slots.")
+    if not fast_structure():
+        valid_states = prefix_states[interface_mask]
+        if torch.any((valid_states != 0) & (valid_states != 1)):
+            raise ValueError("prefix_states must be binary on valid interface slots.")
     return torch.where(interface_mask, prefix_states, 0).to(dtype=torch.long)
 
 

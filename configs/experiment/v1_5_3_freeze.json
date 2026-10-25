@@ -1,0 +1,159 @@
+{
+  "schema_version": "a3-stream-run-v1",
+  "catalog": "<RF_CATALOG_JSON>",
+  "folds": [
+    {
+      "fold": "F1",
+      "train": [
+        "TCL3-2",
+        "TCL3-3",
+        "TCL3-5",
+        "TCL3-6",
+        "TCL4-3",
+        "TCL4-4",
+        "薄"
+      ],
+      "validation": [
+        "TCL3-4",
+        "TCL4-2",
+        "厚2"
+      ],
+      "test": [
+        "TCL3-1",
+        "TCL4-1",
+        "厚1"
+      ]
+    }
+  ],
+  "seeds": [
+    23
+  ],
+  "heads": [
+    "local_independent",
+    "local_pre_independent",
+    "vanilla_chain",
+    "proposed_v15"
+  ],
+  "model": {
+    "backbone": "resnet1d",
+    "backbone_stage": "final_pre_pool",
+    "query_dim": 64,
+    "attention_dim": 64,
+    "token_dim": 64,
+    "prefix_dim": 32,
+    "pcc_hidden_dim": 64,
+    "common_feature_dim": 64,
+    "max_interfaces": 6,
+    "rho": 3.0,
+    "local_base_type": "mlp",
+    "local_base_hidden_dim": 32,
+    "readout_scope": "indexed",
+    "pre_query_conditioned": false,
+    "local_prior_sigma_samples": 40.0,
+    "local_prior_strength": 0.5,
+    "architecture_version": "a3-v1.5",
+    "backbone_norm": "group8",
+    "query_view": "position2",
+    "physical_features": true,
+    "pre_exclude_front_end": null,
+    "canonical_per_trace": false
+  },
+  "training": {
+    "seed": 23,
+    "epochs": 40,
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0,
+    "lambda_local": 0.3,
+    "positive_class_weight": null,
+    "disable_local_auxiliary": false,
+    "patience": 10,
+    "scheduler_step_size": null,
+    "scheduler_gamma": 0.5,
+    "device": "cuda",
+    "real_training_permitted": true,
+    "min_epochs": 15,
+    "min_delta": 0.002,
+    "normal_fpr_limit": 0.02,
+    "selection_rule": "guarded_joint",
+    "outer_evaluation_permitted": false,
+    "local_aux_mode": "clean_upstream",
+    "prefix_replacement_probability": 0.2
+  },
+  "normal_to_positive": 3,
+  "formal_training_permitted": false,
+  "outer_evaluation_permitted": false,
+  "evaluation_batch_size": 128,
+  "validation_selection_root": "<FROZEN_VALIDATION_SELECTION_ROOT>",
+  "label_version": "V2",
+  "development_stage": "v1.5-freeze",
+  "epoch_selection_root": "<FROZEN_EPOCH_SELECTION_ROOT>",
+  "save_epoch_checkpoints": true,
+  "protocol": "V1.5-freeze",
+  "catalog_signature": "7fac189e16773f3d638d664ee1c27f68dc6e7f425b8b03c88f24dcefef8497c7",
+  "epoch_manifest_sha256": "a91e334b895cefe50a6004fdf742517aa8ce46f8fe7b3fc311831e8e3400c42f",
+  "validation_sha256": "a782c0b51b1550c674ef1fd716c8126098b45d27e4a3e10269f119a8178daccd",
+  "automatic_screening": false,
+  "freeze_training_permitted": false,
+  "source_commit": "SET_TO_VERIFIED_V1_5_3_COMMIT",
+  "save_best_correction_npz": true,
+  "input_tail_policy": "nominal_fixed",
+  "physical_statistics_path": "artifacts/v1.5.2/physical_normalization.json",
+  "physical_statistics_sha256": "f6f89f8acf4ca2ff17dc4fdb82a38e8162fc1710f6b916ab96816c4024e982bd",
+  "m6_decision_path": "artifacts/v1.5.2/m6_decision.json",
+  "m6_decision_sha256": "7ef07f0269a1e558393a206ebafe1b6221e1695a120320e1d16483870785ea0e",
+  "physical_feature_scope": "Fixed engineering front0..180 overlaps first Local on 3mm plates; no calibrated reflectivity or causal isolation claim.",
+  "execution_version": "v1.5.3",
+  "input_window_policy": {
+    "name": "board_timebase",
+    "halfwidth_samples": 80
+  },
+  "window_jitter": {
+    "enabled": true,
+    "max_shift_samples": 24,
+    "seed": 23,
+    "distribution": "uniform"
+  },
+  "timebase_calibration_path": "artifacts/v1.5.2/timebase.json",
+  "timebase_calibration_sha256": "0d02b7648e201d1e19e15f6fdbf659c8d979ddb3c9a4940a4f465637ac16ae55",
+  "RF_revision": {
+    "scope": "thin_rf_tail_restore",
+    "model_input_samples": 900,
+    "data_sha256": "23a134601881dad4ce6b7c21a58825d2fa54ee63b161dfb443e489e571be90fc",
+    "all_other_entities_unchanged": true
+  },
+  "speed_release": "v1.5.3-fixed-batch16-v1",
+  "speed": {
+    "workers": 2,
+    "prefetch_factor": 2,
+    "pin_memory": true,
+    "non_blocking": true,
+    "coalesced_finite": true,
+    "cpu_structure": true,
+    "validation_cache": true,
+    "cpu_correction": true,
+    "skip_minibatch_summary": true,
+    "fast_nominal_fixed": true,
+    "fused_adam": false,
+    "tf32": true,
+    "bf16_autocast": false,
+    "cudnn_benchmark": false,
+    "batch_size": 16,
+    "length_buckets": false
+  },
+  "speed_backend_policy": {
+    "dtype": "float32",
+    "tf32": true,
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": true,
+    "deterministic_algorithms": true
+  },
+  "speed_batching_policy": {
+    "name": "frozen_epoch_order_v1",
+    "seed": 23,
+    "drop_last": false,
+    "head_independent": true
+  },
+  "speed_decision_path": "artifacts/v1.5.3/speed_decision.json",
+  "speed_decision_sha256": "405f579a1de0ecc22e5fe500efe0ece103a37a148657b298df70e7fe3756a0ba"
+}

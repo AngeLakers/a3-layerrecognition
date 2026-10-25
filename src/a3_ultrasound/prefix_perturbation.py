@@ -4,6 +4,7 @@ import hashlib
 import math
 import torch
 from a3_ultrasound.models.losses import validate_complete_training_batch
+from a3_ultrasound.speed import fast_structure,cpu_batch,options
 
 
 def replacement_mask(interface_mask, *, probability, seed, epoch, step):
@@ -15,8 +16,8 @@ def replacement_mask(interface_mask, *, probability, seed, epoch, step):
     key = f'a3-prefix-v1:{seed}:{epoch}:{step}'.encode('ascii')
     value = int.from_bytes(hashlib.sha256(key).digest()[:8], 'little') % (2**63-1)
     generator = torch.Generator(device='cpu').manual_seed(value)
-    return ((torch.rand(interface_mask.shape, generator=generator) < probability)
-            & interface_mask.cpu()).to(interface_mask.device)
+    mask=cpu_batch().interface_mask if fast_structure() else interface_mask.cpu()
+    return ((torch.rand(interface_mask.shape, generator=generator) < probability)&mask).to(interface_mask.device)
 
 
 def training_conditional(model, batch, *, probability=0., seed=23, epoch=1, step=0):
@@ -36,7 +37,12 @@ def training_conditional(model, batch, *, probability=0., seed=23, epoch=1, step
     output = model.conditional(encoded, mixed)
     # Count all valid slots to match the declared independent Bernoulli policy.
     # The last slot's replacement cannot affect an earlier conditional.
-    stats = dict(attempted=int(attempt.sum()), changed=int((attempt & (predicted != batch.y)).sum()),
-                 eligible=int(batch.interface_mask.sum()),
-                 attempt_mask_sha256=hashlib.sha256(attempt.cpu().numpy().tobytes()).hexdigest())
+    if fast_structure() and options().coalesced_finite:
+        host_attempt=replacement_mask(cpu_batch().interface_mask,probability=probability,seed=seed,epoch=epoch,step=step)
+        stats=dict(attempted=int(host_attempt.sum()),changed=(attempt & (predicted!=batch.y)).sum(),
+            eligible=int(cpu_batch().interface_mask.sum()),attempt_mask_sha256=hashlib.sha256(host_attempt.numpy().tobytes()).hexdigest())
+    else:
+        stats = dict(attempted=int(attempt.sum()), changed=int((attempt & (predicted != batch.y)).sum()),
+                     eligible=int(batch.interface_mask.sum()),
+                     attempt_mask_sha256=hashlib.sha256(attempt.cpu().numpy().tobytes()).hexdigest())
     return output, stats
