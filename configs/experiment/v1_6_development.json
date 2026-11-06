@@ -1,0 +1,354 @@
+{
+  "schema_version": "a3-stream-run-v1",
+  "catalog": "<RF_CATALOG_JSON>",
+  "folds": [
+    {
+      "fold": "F1",
+      "train": [
+        "TCL3-2",
+        "TCL3-3",
+        "TCL3-5",
+        "TCL3-6",
+        "TCL4-3",
+        "TCL4-4",
+        "薄"
+      ],
+      "validation": [
+        "TCL3-4",
+        "TCL4-2",
+        "厚2"
+      ],
+      "test": [
+        "TCL3-1",
+        "TCL4-1",
+        "厚1"
+      ],
+      "training_states": {
+        "2": {
+          "00": 1182078,
+          "01": 7937,
+          "10": 7686,
+          "11": 6447
+        },
+        "3": {
+          "000": 486249,
+          "001": 844,
+          "010": 1038,
+          "011": 853,
+          "100": 842,
+          "101": 678,
+          "110": 677,
+          "111": 880
+        }
+      },
+      "train_positive": 27882,
+      "proposed_train_normal": 83646,
+      "proposed_epoch_samples": 111528
+    },
+    {
+      "fold": "F2",
+      "train": [
+        "TCL3-1",
+        "TCL3-3",
+        "TCL3-4",
+        "TCL3-6",
+        "TCL4-1",
+        "TCL4-4",
+        "厚1"
+      ],
+      "validation": [
+        "TCL3-5",
+        "TCL4-3",
+        "薄"
+      ],
+      "test": [
+        "TCL3-2",
+        "TCL4-2",
+        "厚2"
+      ],
+      "training_states": {
+        "2": {
+          "00": 1187777,
+          "01": 7885,
+          "10": 7692,
+          "11": 6258
+        },
+        "3": {
+          "000": 479522,
+          "001": 829,
+          "010": 1065,
+          "011": 849,
+          "100": 418,
+          "101": 666,
+          "110": 663,
+          "111": 847
+        }
+      },
+      "train_positive": 27172,
+      "proposed_train_normal": 81516,
+      "proposed_epoch_samples": 108688
+    },
+    {
+      "fold": "F3",
+      "train": [
+        "TCL3-1",
+        "TCL3-2",
+        "TCL3-4",
+        "TCL3-5",
+        "TCL4-1",
+        "TCL4-2",
+        "厚2"
+      ],
+      "validation": [
+        "TCL3-6",
+        "TCL4-4",
+        "厚1"
+      ],
+      "test": [
+        "TCL3-3",
+        "TCL4-3",
+        "薄"
+      ],
+      "training_states": {
+        "2": {
+          "00": 1184393,
+          "01": 7846,
+          "10": 7580,
+          "11": 6550
+        },
+        "3": {
+          "000": 478924,
+          "001": 834,
+          "010": 1041,
+          "011": 870,
+          "100": 423,
+          "101": 660,
+          "110": 666,
+          "111": 847
+        }
+      },
+      "train_positive": 27317,
+      "proposed_train_normal": 81951,
+      "proposed_epoch_samples": 109268
+    },
+    {
+      "fold": "F4",
+      "train": [
+        "TCL3-2",
+        "TCL3-3",
+        "TCL3-5",
+        "TCL3-6",
+        "TCL4-2",
+        "TCL4-3",
+        "厚1",
+        "薄"
+      ],
+      "validation": [
+        "TCL3-1",
+        "TCL4-1",
+        "厚2"
+      ],
+      "test": [
+        "TCL3-4",
+        "TCL4-4"
+      ],
+      "training_states": {
+        "2": {
+          "00": 1367706,
+          "01": 8388,
+          "10": 8202,
+          "11": 8275
+        },
+        "3": {
+          "000": 485651,
+          "001": 849,
+          "010": 1014,
+          "011": 874,
+          "100": 847,
+          "101": 672,
+          "110": 680,
+          "111": 880
+        }
+      },
+      "train_positive": 30681,
+      "proposed_train_normal": 92043,
+      "proposed_epoch_samples": 122724
+    },
+    {
+      "fold": "F5",
+      "train": [
+        "TCL3-1",
+        "TCL3-3",
+        "TCL3-4",
+        "TCL4-1",
+        "TCL4-3",
+        "TCL4-4",
+        "厚1",
+        "厚2"
+      ],
+      "validation": [
+        "TCL3-2",
+        "TCL4-2",
+        "薄"
+      ],
+      "test": [
+        "TCL3-5",
+        "TCL3-6"
+      ],
+      "training_states": {
+        "2": {
+          "00": 1117196,
+          "01": 6127,
+          "10": 6034,
+          "11": 7097
+        },
+        "3": {
+          "000": 721456,
+          "001": 1253,
+          "010": 1556,
+          "011": 1282,
+          "100": 842,
+          "101": 1004,
+          "110": 1003,
+          "111": 1286
+        }
+      },
+      "train_positive": 27484,
+      "proposed_train_normal": 82452,
+      "proposed_epoch_samples": 109936
+    }
+  ],
+  "seeds": [
+    23,
+    41,
+    59,
+    77,
+    97
+  ],
+  "heads": [
+    "local_independent",
+    "local_pre_independent",
+    "vanilla_chain"
+  ],
+  "model": {
+    "backbone": "resnet1d",
+    "backbone_stage": "final_pre_pool",
+    "query_dim": 64,
+    "attention_dim": 64,
+    "token_dim": 64,
+    "prefix_dim": 32,
+    "pcc_hidden_dim": 64,
+    "common_feature_dim": 64,
+    "max_interfaces": 6,
+    "rho": 3.0,
+    "local_base_type": "mlp",
+    "local_base_hidden_dim": 32,
+    "readout_scope": "indexed",
+    "pre_query_conditioned": false,
+    "local_prior_sigma_samples": 40.0,
+    "local_prior_strength": 0.5,
+    "architecture_version": "a3-v1.6",
+    "backbone_norm": "group8",
+    "query_view": "position2",
+    "physical_features": false,
+    "pre_exclude_front_end": null,
+    "canonical_per_trace": false,
+    "input_channels": 1
+  },
+  "training": {
+    "seed": 23,
+    "epochs": 40,
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0,
+    "lambda_local": 0.3,
+    "positive_class_weight": null,
+    "disable_local_auxiliary": false,
+    "patience": 10,
+    "scheduler_step_size": null,
+    "scheduler_gamma": 0.5,
+    "device": "cuda",
+    "real_training_permitted": true,
+    "min_epochs": 15,
+    "min_delta": 0.002,
+    "normal_fpr_limit": 0.02,
+    "selection_rule": "guarded_joint",
+    "outer_evaluation_permitted": false,
+    "local_aux_mode": "clean_upstream",
+    "prefix_replacement_probability": 0.2
+  },
+  "normal_to_positive": 3,
+  "formal_training_permitted": false,
+  "outer_evaluation_permitted": false,
+  "evaluation_batch_size": 128,
+  "validation_selection_root": "<FROZEN_VALIDATION_SELECTION_ROOT>",
+  "label_version": "V2",
+  "development_stage": "v1.6-development",
+  "epoch_selection_root": "<FROZEN_EPOCH_SELECTION_ROOT>",
+  "save_epoch_checkpoints": true,
+  "protocol": "V1.6-development",
+  "catalog_signature": "7fac189e16773f3d638d664ee1c27f68dc6e7f425b8b03c88f24dcefef8497c7",
+  "epoch_manifest_sha256": "a91e334b895cefe50a6004fdf742517aa8ce46f8fe7b3fc311831e8e3400c42f",
+  "validation_sha256": "a782c0b51b1550c674ef1fd716c8126098b45d27e4a3e10269f119a8178daccd",
+  "automatic_screening": false,
+  "freeze_training_permitted": false,
+  "source_commit": "UNFROZEN_V16_DEVELOPMENT",
+  "save_best_correction_npz": true,
+  "input_tail_policy": "nominal_fixed",
+  "m6_decision_path": "artifacts/v1.5.2/m6_decision.json",
+  "m6_decision_sha256": "7ef07f0269a1e558393a206ebafe1b6221e1695a120320e1d16483870785ea0e",
+  "execution_version": "v1.6",
+  "input_window_policy": {
+    "name": "board_timebase",
+    "halfwidth_samples": 80
+  },
+  "window_jitter": {
+    "enabled": true,
+    "max_shift_samples": 24,
+    "seed": 23,
+    "distribution": "uniform"
+  },
+  "timebase_calibration_path": "artifacts/v1.6/timebase.json",
+  "timebase_calibration_sha256": "446ef99e74faa6ed7ef7dc2ef30667e988c8fdc7f1a840d1d50539c17285e487",
+  "RF_revision": {
+    "scope": "thin_rf_tail_restore",
+    "model_input_samples": 900,
+    "data_sha256": "23a134601881dad4ce6b7c21a58825d2fa54ee63b161dfb443e489e571be90fc",
+    "all_other_entities_unchanged": true
+  },
+  "speed_release": "v1.5.3-fixed-batch16-v1",
+  "speed": {
+    "workers": 2,
+    "prefetch_factor": 2,
+    "pin_memory": true,
+    "non_blocking": true,
+    "coalesced_finite": true,
+    "cpu_structure": true,
+    "validation_cache": true,
+    "cpu_correction": true,
+    "skip_minibatch_summary": true,
+    "fast_nominal_fixed": true,
+    "fused_adam": false,
+    "tf32": true,
+    "bf16_autocast": false,
+    "cudnn_benchmark": false,
+    "batch_size": 16,
+    "length_buckets": false
+  },
+  "speed_backend_policy": {
+    "dtype": "float32",
+    "tf32": true,
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": true,
+    "deterministic_algorithms": true
+  },
+  "speed_batching_policy": {
+    "name": "frozen_epoch_order_v1",
+    "seed": 23,
+    "drop_last": false,
+    "head_independent": true
+  },
+  "speed_decision_path": "artifacts/v1.5.3/speed_decision.json",
+  "speed_decision_sha256": "405f579a1de0ecc22e5fe500efe0ece103a37a148657b298df70e7fe3756a0ba",
+  "m3_channel": "none"
+}

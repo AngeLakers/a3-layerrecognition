@@ -70,18 +70,18 @@ class CommonTemporalBackboneAdapter(nn.Module):
 
 
 def _validate_temporal_inputs(x_raw: Tensor, length_mask: Tensor) -> Tensor:
-    if x_raw.ndim != 2:
-        raise ValueError("x_raw must have shape [B, T].")
-    if length_mask.shape != x_raw.shape or length_mask.dtype != torch.bool:
+    if x_raw.ndim not in (2, 3):
+        raise ValueError("x_raw must have shape [B, T] or [B, C, T].")
+    if length_mask.shape != (x_raw.shape[0], x_raw.shape[-1]) or length_mask.dtype != torch.bool:
         raise ValueError("length_mask must be bool with the same [B, T] shape.")
-    if x_raw.shape[1] == 0:
+    if x_raw.shape[-1] == 0:
         raise ValueError("x_raw must contain at least one time sample.")
 
     valid_lengths = length_mask.sum(dim=1)
     if not fast_structure() and torch.any(valid_lengths == 0):
         raise ValueError("every trace must contain at least one valid sample.")
     expected_mask = (
-        torch.arange(x_raw.shape[1], device=x_raw.device).unsqueeze(0)
+        torch.arange(x_raw.shape[-1], device=x_raw.device).unsqueeze(0)
         < valid_lengths.unsqueeze(1)
     )
     if not fast_structure() and not torch.equal(length_mask, expected_mask):
@@ -109,7 +109,9 @@ def _encode_by_valid_length(
         valid_length = int(valid_length_tensor) if host_lengths is not None else int(valid_length_tensor.item())
         batch_indices = (torch.tensor([i for i,n in enumerate(host_lengths) if n==valid_length],device=x_raw.device)
             if host_lengths is not None else torch.nonzero(valid_lengths==valid_length_tensor,as_tuple=False).squeeze(1))
-        group_input = x_raw.index_select(0, batch_indices)[:, None, :valid_length]
+        group_input = x_raw.index_select(0, batch_indices)[..., :valid_length]
+        if group_input.ndim == 2:
+            group_input = group_input[:, None, :]
         # GN is sample-independent mathematically. Use identical trunk call
         # shapes for bit-stable FP32 features across batch compositions; some
         # batched convolution kernels otherwise differ by >1e-5 on real RF.
@@ -180,6 +182,7 @@ class LengthGroupedTCNBackbone(nn.Module):
         dilations: Sequence[int] | None = (1, 2, 4),
         dropout: float = 0.0,
         use_norm: str | None = "weight_norm",
+        input_channels: int = 1,
     ) -> None:
         super().__init__()
         channel_list = list(channels)
@@ -214,7 +217,7 @@ class LengthGroupedTCNBackbone(nn.Module):
 
         self.output_dim = channel_list[-1]
         self.tcn = TCN(
-            num_inputs=1,
+            num_inputs=input_channels,
             num_channels=channel_list,
             kernel_size=kernel_size,
             dilations=dilation_list,
@@ -250,6 +253,7 @@ class TsaiTimePreservingBackbone(nn.Module):
         fcn_layers: Sequence[int] = (128, 256, 128),
         backbone_norm: str = "batch",
         canonical_per_trace: bool = True,
+        input_channels: int = 1,
     ) -> None:
         super().__init__()
         resolved_stage = "stage3" if feature_stage == "final_pre_pool" else feature_stage
@@ -259,7 +263,7 @@ class TsaiTimePreservingBackbone(nn.Module):
         if name == "resnet1d":
             from tsai.models.ResNet import ResNet
 
-            classifier = ResNet(1, 2)
+            classifier = ResNet(input_channels, 2)
             available_modules = (
                 classifier.resblock1,
                 classifier.resblock2,
@@ -269,7 +273,7 @@ class TsaiTimePreservingBackbone(nn.Module):
         elif name == "inceptiontime":
             from tsai.models.InceptionTime import InceptionTime
 
-            classifier = InceptionTime(1, 2, nf=inception_nf)
+            classifier = InceptionTime(input_channels, 2, nf=inception_nf)
             if resolved_stage != "stage3":
                 raise ValueError(
                     "The current InceptionTime wrapper exposes only final_pre_pool."
@@ -286,7 +290,7 @@ class TsaiTimePreservingBackbone(nn.Module):
                 for value in layer_list
             ):
                 raise ValueError("fcn_layers must contain three positive integers.")
-            classifier = FCN(1, 2, layers=layer_list)
+            classifier = FCN(input_channels, 2, layers=layer_list)
             available_modules = (
                 classifier.convblock1,
                 classifier.convblock2,

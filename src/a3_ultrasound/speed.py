@@ -67,7 +67,7 @@ def validate_cpu_batch(batch,*,training=False):
     batch.__post_init__()
     n=batch.length_mask.sum(1);k=batch.interface_mask.sum(1)
     if not len(n) or torch.any(n<1) or torch.any(k<1):raise ValueError('Nonempty valid prefixes required')
-    if not torch.equal(batch.length_mask,torch.arange(batch.x_raw.shape[1])[None]<n[:,None]):raise ValueError('Noncontiguous length mask')
+    if not torch.equal(batch.length_mask,torch.arange(batch.x_raw.shape[-1])[None]<n[:,None]):raise ValueError('Noncontiguous length mask')
     if not torch.equal(batch.interface_mask,torch.arange(batch.interface_mask.shape[1])[None]<k[:,None]):raise ValueError('Noncontiguous interface mask')
     if batch.label_mask is not None and torch.any(batch.label_mask & ~batch.interface_mask):raise ValueError('Labels cannot supervise padding')
     tau=batch.interface_meta[...,1]*n[:,None];left=tau-batch.interface_meta[...,3]*n[:,None];right=tau+batch.interface_meta[...,4]*n[:,None]

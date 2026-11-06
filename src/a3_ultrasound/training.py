@@ -56,6 +56,7 @@ class ModelConfig:
     local_prior_strength: float = 1.0
     physical_features: bool = False
     pre_exclude_front_end: int | None = None
+    input_channels: int = 1
 
 
 @dataclass(frozen=True)
@@ -83,10 +84,16 @@ class TrainingConfig:
 
 
 def build_model(config: ModelConfig) -> A3Model:
-    if config.architecture_version not in ("a3-v1.3", "a3-v1.4", "a3-v1.5"):
+    if config.architecture_version not in ("a3-v1.3", "a3-v1.4", "a3-v1.5", "a3-v1.6"):
         raise ValueError("Unknown architecture_version.")
-    if config.architecture_version in ("a3-v1.4", "a3-v1.5") and (config.backbone_norm != "group8" or config.query_view != "position2"):
+    if config.architecture_version in ("a3-v1.4", "a3-v1.5", "a3-v1.6") and (config.backbone_norm != "group8" or config.query_view != "position2"):
         raise ValueError("V1.4 requires group8 and position2.")
+    if type(config.input_channels) is not int or config.input_channels not in (1, 2):
+        raise ValueError("input_channels must be 1 or 2.")
+    if config.architecture_version != "a3-v1.6" and config.input_channels != 1:
+        raise ValueError("Legacy architectures require one channel.")
+    if config.architecture_version == "a3-v1.6" and (config.physical_features or config.head_type not in ("local_independent", "local_pre_independent", "vanilla_chain")):
+        raise ValueError("V1.6 permits only L/LP/V without physical features.")
     if config.head_type not in HEAD_TYPES:
         raise ValueError("Unknown head_type.")
     if config.rho not in (1.0, 2.0, 3.0):
@@ -97,12 +104,13 @@ def build_model(config: ModelConfig) -> A3Model:
         if config.backbone_stage != "final_pre_pool":
             raise ValueError("TCN smoke supports final_pre_pool only.")
         backbone = LengthGroupedTCNBackbone(channels=(8, 8), kernel_size=3,
-                                           dilations=(1, 2), use_norm=None)
+                                           dilations=(1, 2), use_norm=None, input_channels=config.input_channels)
     else:
         backbone = TsaiTimePreservingBackbone(config.backbone, feature_stage=config.backbone_stage,
                                               backbone_norm=config.backbone_norm,
-                                              canonical_per_trace=config.canonical_per_trace)
+                                              canonical_per_trace=config.canonical_per_trace, input_channels=config.input_channels)
     kwargs = asdict(config)
+    kwargs.pop("input_channels")
     kwargs.pop("backbone")
     kwargs.pop("backbone_stage")
     kwargs.pop("backbone_norm")
@@ -571,7 +579,7 @@ def synthetic_datasets(seed: int, samples_per_split: int = 8) -> dict[str, Tenso
 
 def load_checkpoint(path: Path, *, device: str = "cpu") -> tuple[A3Model, dict[str, Any]]:
     checkpoint = torch.load(path, map_location=device, weights_only=True)
-    if checkpoint.get("architecture_version") not in ("a3-v1.3", "a3-v1.4", "a3-v1.5"):
+    if checkpoint.get("architecture_version") not in ("a3-v1.3", "a3-v1.4", "a3-v1.5", "a3-v1.6"):
         raise ValueError("Expected a V1.3 checkpoint from the common runner.")
     model = build_model(ModelConfig(**checkpoint["resolved_config"]["model"])).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])

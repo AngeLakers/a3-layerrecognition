@@ -76,6 +76,9 @@ def validate_fold(fold,catalog):
 
 def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
     cfg=json.loads(Path(config_path).read_text(encoding='utf-8'))
+    if cfg.get('model',{}).get('architecture_version')=='a3-v1.6':
+        from a3_ultrasound.v16_protocol import validate_config
+        validate_config(cfg,fold_name=fold_name,seed=seed,head=head)
     v15=cfg.get('protocol')==V15_PROTOCOL
     frozen=cfg.get('protocol') in (FREEZE_PROTOCOL,V15_PROTOCOL)
     code_version=_code_version()
@@ -309,7 +312,7 @@ def stage2_alarms(epoch,score):
 
 def test_checkpoint(config_path,checkpoint_path,output):
     cfg=json.loads(Path(config_path).read_text(encoding='utf-8'))
-    if cfg.get('protocol') in (FREEZE_PROTOCOL,V15_PROTOCOL):raise ValueError('Outer evaluation is closed for frozen development runs.')
+    if cfg.get('protocol') in (FREEZE_PROTOCOL,V15_PROTOCOL) or cfg.get('model',{}).get('architecture_version')=='a3-v1.6':raise ValueError('Outer evaluation is closed for frozen development runs.')
     if not cfg.get('outer_evaluation_permitted',False):raise ValueError('Outer evaluation remains closed.')
     c=torch.load(checkpoint_path,map_location=cfg['training']['device'],weights_only=True);resolved=c['resolved_config']
     if resolved.get('development_stage') is not None:

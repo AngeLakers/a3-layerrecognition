@@ -47,9 +47,11 @@ class InterfaceBatch:
     phys_ctx: Tensor | None = None
 
     def __post_init__(self) -> None:
-        if self.x_raw.ndim != 2:
-            raise ValueError("x_raw must have shape [B, T].")
-        batch_size, trace_length = self.x_raw.shape
+        if self.x_raw.ndim not in (2, 3):
+            raise ValueError("x_raw must have shape [B, T] or [B, C, T].")
+        batch_size, trace_length = self.x_raw.shape[0], self.x_raw.shape[-1]
+        if self.x_raw.ndim == 3 and self.x_raw.shape[1] not in (1, 2):
+            raise ValueError("Expected one or two RF channels.")
         if self.x_raw.dtype != torch.float32:
             raise TypeError("x_raw must be float32 to preserve the RF contract.")
         if self.length_mask.shape != (batch_size, trace_length):
