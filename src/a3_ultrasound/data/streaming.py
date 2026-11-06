@@ -19,10 +19,12 @@ class RFShardDataset:
 
     def __init__(self, catalog_path, entities, *, training=False, seed=23,
                  normal_ratio=3, diagnostic_per_class=None, physical_config=None,
-                 tail_policy=None, window_policy=None, timebase_config=None, window_jitter=None):
+                 tail_policy=None, window_policy=None, timebase_config=None, window_jitter=None,
+                 m3_config=None):
         self._spawn_kwargs=dict(catalog_path=catalog_path,entities=list(entities),training=training,seed=seed,
             normal_ratio=normal_ratio,diagnostic_per_class=diagnostic_per_class,physical_config=physical_config,
-            tail_policy=tail_policy,window_policy=window_policy,timebase_config=timebase_config,window_jitter=window_jitter)
+            tail_policy=tail_policy,window_policy=window_policy,timebase_config=timebase_config,window_jitter=window_jitter,
+            m3_config=m3_config)
         self.speed_options=SpeedOptions();self._record_cache={}
         self.path=Path(catalog_path)
         self.catalog=json.loads(self.path.read_text(encoding='utf-8'))
@@ -53,6 +55,13 @@ class RFShardDataset:
             expected = physical_config.get('effective_input_config')
             if expected is not None and expected != self.config:
                 raise ValueError('Physical statistics and effective dataset input config disagree.')
+        self.m3=None
+        if m3_config is not None:
+            # V1.6 E4/E5: second channel from the same raw record, frozen centres only.
+            if timebase_config is None or physical_config is not None:
+                raise ValueError('The M3 channel requires the frozen board timebase and no physical tokens.')
+            from a3_ultrasound.data.v16_channels import M3Channel
+            self.m3=M3Channel(m3_config,self.timebase_rows,list(entities))
         self.shards=[]; refs=[]
         requested=list(entities)
         if not requested or len(set(requested))!=len(requested):
@@ -148,9 +157,14 @@ class RFShardDataset:
             if self.training and self.window_jitter is not None:
                 shift=shared_window_shift(self.window_jitter['seed'],self.jitter_epoch,
                     int(shard['ordinal']),int(a['source_row'][i]),self.window_jitter['max_shift_samples'])
-            x,meta,info=transform_trace(shard['rf'][start:start+length],shard,self.config,
+            raw=shard['rf'][start:start+length]
+            x,meta,info=transform_trace(raw,shard,self.config,
                 timebase=self.timebase_rows.get(shard['entity']),window_shift=shift,
                 skip_nominal_diagnostics=self.speed_options.fast_nominal_fixed)
+            if self.m3 is not None:
+                # Same retained prefix and the same fixed divisor as x: [2, n].
+                second=self.m3(shard['entity'],raw)[:len(x)]/np.float32(info['divisor'])
+                x=np.stack((x,second.astype(np.float32)))
             if self.physical_config is not None:
                 p=self.physical_config;tau=np.asarray(info['nominal_tof_samples'])
                 if shard['entity'] in self.timebase_rows:
@@ -166,9 +180,10 @@ class RFShardDataset:
             traces.append(x);metas.append(meta);ys.append(y);masks.append(mask);label_masks.append(lm)
             if not self.training and self.speed_options.validation_cache:
                 self._record_cache[(int(s),int(i))]=(x,meta,y,mask,lm,loc if self.physical_config else None,ctx if self.physical_config else None)
-        lengths=np.array([len(x) for x in traces]);padded=np.zeros((len(traces),int(lengths.max())),np.float32)
-        for j,x in enumerate(traces):padded[j,:len(x)]=x
-        values={'x_raw':padded,'length_mask':np.arange(padded.shape[1])[None]<lengths[:,None],
+        lengths=np.array([x.shape[-1] for x in traces])
+        padded=np.zeros((len(traces),*traces[0].shape[:-1],int(lengths.max())),np.float32)
+        for j,x in enumerate(traces):padded[j,...,:x.shape[-1]]=x
+        values={'x_raw':padded,'length_mask':np.arange(padded.shape[-1])[None]<lengths[:,None],
                 'interface_meta':np.stack(metas),'interface_mask':np.stack(masks),
                 'label_mask':np.stack(label_masks),'y':np.stack(ys)}
         if self.physical_config is not None:
@@ -232,7 +247,7 @@ class RFShardDataset:
         for j,index in enumerate(ids):
             s,i=self.refs[int(index)];n=int(host.length_mask[j].sum())
             val=lambda name:None if getattr(host,name) is None else getattr(host,name)[j].numpy().copy()
-            self._record_cache[(int(s),int(i))]=(host.x_raw[j,:n].numpy().copy(),val('interface_meta'),val('y'),val('interface_mask'),val('label_mask'),val('phys_loc'),val('phys_ctx'))
+            self._record_cache[(int(s),int(i))]=(host.x_raw[j,...,:n].numpy().copy(),val('interface_meta'),val('y'),val('interface_mask'),val('label_mask'),val('phys_loc'),val('phys_ctx'))
 
 def _identity(value):return value
 def _worker_init(_):torch.set_num_threads(1)

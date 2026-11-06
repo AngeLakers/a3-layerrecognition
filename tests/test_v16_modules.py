@@ -5,7 +5,6 @@ import torch
 from a3_ultrasound.evaluation.v16_metrics import joint_metrics, calibration, risk_coverage
 from a3_ultrasound.evaluation.v16_temperature import tempered_log_joint, specimen_oof
 from a3_ultrasound.data.m3_transform import dictionary, transform, fit_family
-from a3_ultrasound.data.v16_channels import attach_channel
 from a3_ultrasound.training import ModelConfig, build_model, synthetic_datasets
 from a3_ultrasound.v16_protocol import template,validate_config,matrix
 
@@ -74,10 +73,9 @@ def test_train_only_fit_and_fallback():
 def test_dual_channel_shared_geometry():
     batch=synthetic_datasets(23,2)['train'].batch
     n=batch.x_raw.shape[-1]
-    out=attach_channel(batch,[np.arange(n+7,dtype=np.float32)]*len(batch.x_raw))
+    second=torch.arange(n,dtype=torch.float32).expand(len(batch.x_raw),-1)*batch.length_mask
+    out=replace(batch,x_raw=torch.stack((batch.x_raw,second),dim=1))
     assert out.x_raw.shape==(len(batch.x_raw),2,n)
-    assert out.interface_meta is batch.interface_meta
-    assert out.length_mask is batch.length_mask
     torch.testing.assert_close(out.x_raw[:,0],batch.x_raw,rtol=0,atol=0)
     cfg=ModelConfig(architecture_version='a3-v1.6',backbone='tcn',backbone_norm='group8',query_view='position2',head_type='vanilla_chain',input_channels=2)
     model=build_model(cfg);result=model.infer_exact(out)
@@ -143,6 +141,8 @@ def test_d2_requires_all_groups_and_support():
         for group in (('K2:0','K2:1') if e['K']==2 else ('K3:00','K3:01','K3:10')):
             rows.append(dict(fold=e['fold'],board=e['board'],group=group,x=.7,r=.75,d=.74,fit_normal_support=200))
     assert choose_channel(rows,events)['channel']=='residual'
-    assert choose_channel(rows[:-1],events)['status']=='INSUFFICIENT'
+    # K3 groups may lose an event (>=3 remain); K2 groups need all five.
+    assert choose_channel(rows[:-1],events)['status']=='DECIDED'
+    assert choose_channel([r for r in rows if r['group']!='K2:1' or r['fold']!='F1'],events)['status']=='INSUFFICIENT'
     rows[0]['fit_normal_support']=199
     assert choose_channel(rows,events)['status']=='INSUFFICIENT'

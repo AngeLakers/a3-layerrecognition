@@ -122,6 +122,7 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
     timebase = load_timebase_artifact(cfg) if v15 else None
     if model_config.physical_features and not v15:
         raise ValueError('Physical stream training requires the V1.5 normalization contract.')
+    v16=model_config.architecture_version=='a3-v1.6'
     if frozen:verify_panels(cfg,catalog_signature(catalog))
     random.seed(seed);np.random.seed(seed);torch.manual_seed(seed);torch.set_num_threads(2)
     if torch.cuda.is_available():torch.cuda.manual_seed_all(seed)
@@ -130,6 +131,8 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
     if speed.tf32 or speed.bf16_autocast or speed.cudnn_benchmark:configure_backend(speed)
     if speed.batch_size is not None:tc=TrainingConfig(**dict(asdict(tc),batch_size=speed.batch_size))
     training=dataset_from_config(runtime_cfg,'diagnostic' if diagnostic else 'train')
+    if v16 and (model_config.input_channels==2)!=(training.m3 is not None):
+        raise ValueError('Model input channels and dataset M3 channel disagree.')
     if not diagnostic and not cfg.get('epoch_selection_root'):
         selection=Path(cfg['frozen_selection_root'])/f'{fold_name}_s{seed}.npy'
         if not np.array_equal(training.refs,np.load(selection,allow_pickle=False)):
@@ -173,6 +176,9 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
             resolved.update(timebase_calibration_sha256=cfg['timebase_calibration_sha256'],
                 window_jitter=cfg['window_jitter'],
                 window_jitter_identity='seed,epoch,catalog ordinal,source_row; common to all Heads; evaluation shift0')
+    if v16:
+        from a3_ultrasound.v16_protocol import runtime_record
+        resolved.update(runtime_record(cfg,fold_name,output))
     resolved.update(code_version=code_version,commit_hash=code_version.get('commit'),config_sha256=config_sha256,
                     protocol=cfg.get('protocol'),automatic_screening=False if frozen else development,old_weights_reused=False)
     if development:

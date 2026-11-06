@@ -146,11 +146,17 @@ def dataset_from_config(cfg,split):
     fold=next(f for f in cfg['folds'] if f['fold']==cfg.get('fold_name',cfg['folds'][0]['fold']))
     physical,_=load_physical_artifacts(cfg) if cfg.get('protocol')==V15_PROTOCOL else (None,None)
     table=load_timebase_artifact(cfg) if cfg.get('protocol')==V15_PROTOCOL else None
+    m3=None
+    from a3_ultrasound.v16_protocol import is_v16
+    if is_v16(cfg):
+        # V1.6: frozen 2026-11-05 centres, M6 stays off, optional fold-fixed M3 channel.
+        from a3_ultrasound.v16_protocol import load_v16_timebase,verify_m6_inactive,load_m3_channel
+        verify_m6_inactive(cfg);table=load_v16_timebase(cfg);m3=load_m3_channel(cfg,fold['fold'])
     training=split in ('train','diagnostic');seed=cfg.get('seed',cfg['seeds'][0])
     data=RFShardDataset(cfg['catalog'],fold['train' if training else split],training=training,seed=seed,
         normal_ratio=cfg['normal_to_positive'],diagnostic_per_class=cfg.get('diagnostic',{}).get('per_entity_per_class') if split=='diagnostic' else None,
         physical_config=physical,tail_policy=cfg.get('input_tail_policy'),window_policy=cfg.get('input_window_policy'),
-        timebase_config=table,window_jitter=cfg.get('window_jitter') if training else None)
+        timebase_config=table,window_jitter=cfg.get('window_jitter') if training else None,m3_config=m3)
     data.speed_options=SpeedOptions(**cfg.get('speed',{}))
     if split=='validation' and cfg.get('validation_selection_root'):
         from a3_ultrasound.stream_training import catalog_signature
