@@ -2,12 +2,12 @@
 from __future__ import annotations
 from dataclasses import asdict
 from collections import defaultdict
-import hashlib,json,random,time
+import hashlib,json,math,random,time
 from pathlib import Path
 import numpy as np
 import torch
 from a3_ultrasound.data.streaming import RFShardDataset
-from a3_ultrasound.training import ModelConfig,TrainingConfig,TensorDataset,build_model,build_optimizer,evaluate,_validate_training_config,_code_version
+from a3_ultrasound.training import ModelConfig,TrainingConfig,TensorDataset,build_model,build_optimizer,evaluate,_validate_training_config,_code_version,scheduled_learning_rate
 from a3_ultrasound.models.losses import head_training_loss
 from a3_ultrasound.prefix_perturbation import training_conditional
 from a3_ultrasound.stream_metrics import PredictionAccumulator
@@ -199,7 +199,12 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
             perturbation=dict(attempted=0,changed=0,eligible=0)
             perturbation_hash=hashlib.sha256()
             progress(output/'progress.json',phase='training',epoch=epoch,records=0,total_records=len(training),updates_total=updates)
+            steps_per_epoch=max(1,math.ceil(len(training)/tc.batch_size));epoch_lr=[]
             for step,(batch,ids) in enumerate(training.batches(tc.batch_size,tc.device,generator=None if cfg.get('epoch_selection_root') else generator)):
+                if tc.lr_schedule is not None:
+                    lr=scheduled_learning_rate(tc,epoch-1+step/steps_per_epoch)
+                    for group in optimizer.param_groups:group['lr']=lr
+                    if step==0:epoch_lr.append(lr)
                 optimizer.zero_grad(set_to_none=True)
                 scope=speed_context(speed,batch,training=True)
                 with scope:
@@ -229,6 +234,7 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
                 for value,(_,weight) in zip(values,deferred_losses):total+=value*weight
             perturbation={k:int(v) for k,v in perturbation.items()}
             record={'epoch':epoch,'train_loss':total/seen,'records':seen,'updates_total':updates}
+            if tc.lr_schedule is not None:record.update(lr_epoch_start=epoch_lr[0] if epoch_lr else None,lr_last=optimizer.param_groups[0]['lr'])
             if tc.prefix_replacement_probability:
                 record['prefix_perturbation']=dict(perturbation,attempt_sequence_sha256=perturbation_hash.hexdigest())
             if validation is not None:

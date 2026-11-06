@@ -263,3 +263,16 @@ def test_fit_and_d2_runners_touch_only_their_panels(frozen, tmp_path):
     assert decision['status']=='INSUFFICIENT'
     assert {k.split(':')[1] for k in identities}=={b for f in cfg['folds'] for b in f['validation']}
     assert all(r['x']==r['r'] for r in table if r['x'] is not None)
+
+
+def test_cosine_learning_rate_schedule():
+    from a3_ultrasound.training import TrainingConfig, _validate_training_config, scheduled_learning_rate
+    cfg=protocol.template()['training']
+    tc=TrainingConfig(**cfg);_validate_training_config(tc)
+    lr=[scheduled_learning_rate(tc,u) for u in np.arange(0,40,.25)]
+    assert lr[0]==pytest.approx(1e-3/3) and scheduled_learning_rate(tc,2)==pytest.approx(1e-3)
+    assert all(b>=a for a,b in zip(lr[:8],lr[1:9])) and all(b<=a for a,b in zip(lr[8:],lr[9:]))
+    assert scheduled_learning_rate(tc,40)==pytest.approx(1e-5)
+    assert scheduled_learning_rate(TrainingConfig(),7.5)==1e-3   # v1.5 configs: constant
+    with pytest.raises(ValueError,match='either'):
+        _validate_training_config(TrainingConfig(**dict(cfg,scheduler_step_size=5)))
