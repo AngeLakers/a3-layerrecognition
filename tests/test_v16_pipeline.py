@@ -276,3 +276,19 @@ def test_cosine_learning_rate_schedule():
     assert scheduled_learning_rate(TrainingConfig(),7.5)==1e-3   # v1.5 configs: constant
     with pytest.raises(ValueError,match='either'):
         _validate_training_config(TrainingConfig(**dict(cfg,scheduler_step_size=5)))
+
+
+def test_calibration_export_requires_guarded_v16_runs(tmp_path):
+    from a3_ultrasound.evaluation.v16_export import export_rows
+    run=tmp_path/'r';run.mkdir()
+    fold=dict(fold='F1',validation=['TCL3-4'])
+    (run/'resolved_config.json').write_text(json.dumps(dict(fold=fold,seed=23,model=dict(head_type='vanilla_chain'),
+        architecture_version='a3-v1.6',diagnostic=False)))
+    (run/'summary.json').write_text(json.dumps(dict(status='COMPLETED',guard_violated=False,selected_checkpoint='best_guarded.pt')))
+    rows=[dict(sample_id='TCL3-4:1',specimen_id='TCL3-4',y=[0,1],label_mask=[True,True],log_probabilities=[-1.3863]*4,sample_weight=3),
+          dict(sample_id='TCL3-4:2',specimen_id='TCL3-4',y=[0,0],label_mask=[True,False],log_probabilities=[-1.3863]*4,sample_weight=1)]
+    (run/'predictions.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in rows))
+    out=export_rows([run],head='vanilla_chain',seed=23)
+    assert len(out)==1 and out[0]['checkpoint_kind']=='guarded' and out[0]['fold']=='F1'
+    (run/'summary.json').write_text(json.dumps(dict(status='COMPLETED',guard_violated=True,selected_checkpoint='best_fallback.pt')))
+    with pytest.raises(ValueError,match='guarded'):export_rows([run],head='vanilla_chain',seed=23)
