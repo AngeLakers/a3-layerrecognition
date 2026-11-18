@@ -81,9 +81,27 @@ class TrainingConfig:
     outer_evaluation_permitted: bool = False
     local_aux_mode: str | None = None
     prefix_replacement_probability: float = 0.0
+    lr_schedule: str | None = None
+    lr_warmup_epochs: int = 0
+    lr_min: float = 0.0
 
 
-def build_model(config: ModelConfig) -> A3Model:
+def scheduled_learning_rate(config: TrainingConfig, progress: float) -> float:
+    """Learning rate at fractional epoch progress u in [0, epochs).
+
+    None keeps the historical constant rate. 'cosine': linear warmup over W
+    epochs (lr0*(u+1)/(W+1)) to lr0, then lr_min + (lr0-lr_min)/2*(1+cos(pi*(u-W)/(E-W))).
+    Depends only on (epoch, step), never on validation, so all Heads share it.
+    """
+    lr0=config.learning_rate
+    if config.lr_schedule is None:return lr0
+    w=config.lr_warmup_epochs;e=config.epochs
+    if progress<w:return lr0*(progress+1)/(w+1)
+    ratio=min(1.,(progress-w)/max(e-w,1e-12))
+    return config.lr_min+(lr0-config.lr_min)*.5*(1+math.cos(math.pi*ratio))
+
+
+def build_model(config: ModelConfig, *, v171: bool = False) -> A3Model:
     if config.architecture_version not in ("a3-v1.3", "a3-v1.4", "a3-v1.5", "a3-v1.6"):
         raise ValueError("Unknown architecture_version.")
     if config.architecture_version in ("a3-v1.4", "a3-v1.5", "a3-v1.6") and (config.backbone_norm != "group8" or config.query_view != "position2"):
@@ -92,9 +110,12 @@ def build_model(config: ModelConfig) -> A3Model:
         raise ValueError("input_channels must be 1 or 2.")
     if config.architecture_version != "a3-v1.6" and config.input_channels != 1:
         raise ValueError("Legacy architectures require one channel.")
-    if config.architecture_version == "a3-v1.6" and (config.physical_features or config.head_type not in ("local_independent", "local_pre_independent", "vanilla_chain")):
-        raise ValueError("V1.6 permits only L/LP/V without physical features.")
-    if config.head_type not in HEAD_TYPES:
+    global_head = v171 and config.head_type == 'g1d'
+    if config.architecture_version == "a3-v1.6":
+        legacy_head = config.head_type in ("local_independent", "local_pre_independent", "vanilla_chain")
+        if config.physical_features or not (legacy_head or global_head):
+            raise ValueError("V1.6 permits only L/LP/V without physical features.")
+    if config.head_type not in HEAD_TYPES and not global_head:
         raise ValueError("Unknown head_type.")
     if config.rho not in (1.0, 2.0, 3.0):
         raise ValueError("rho must use the registered candidates 1, 2, 3.")
@@ -103,12 +124,19 @@ def build_model(config: ModelConfig) -> A3Model:
     if config.backbone == "tcn":
         if config.backbone_stage != "final_pre_pool":
             raise ValueError("TCN smoke supports final_pre_pool only.")
-        backbone = LengthGroupedTCNBackbone(channels=(8, 8), kernel_size=3,
-                                           dilations=(1, 2), use_norm=None, input_channels=config.input_channels)
+        if v171:
+            backbone = LengthGroupedTCNBackbone(channels=(128, 128, 128), kernel_size=5,
+                                               dilations=(1, 2, 4), use_norm='group8', input_channels=1)
+        else:
+            backbone = LengthGroupedTCNBackbone(channels=(8, 8), kernel_size=3,
+                                               dilations=(1, 2), use_norm=None, input_channels=config.input_channels)
     else:
         backbone = TsaiTimePreservingBackbone(config.backbone, feature_stage=config.backbone_stage,
                                               backbone_norm=config.backbone_norm,
                                               canonical_per_trace=config.canonical_per_trace, input_channels=config.input_channels)
+    if global_head:
+        from a3_ultrasound.models.g1d import G1DModel
+        return G1DModel(backbone, attention_dim=config.attention_dim, hidden_dim=config.local_base_hidden_dim)
     kwargs = asdict(config)
     kwargs.pop("input_channels")
     kwargs.pop("backbone")
@@ -386,6 +414,14 @@ def _validate_training_config(config: TrainingConfig) -> None:
         raise ValueError("scheduler_step_size must be a positive integer or null.")
     if not math.isfinite(config.scheduler_gamma) or not 0 < config.scheduler_gamma <= 1:
         raise ValueError("scheduler_gamma must lie in (0, 1].")
+    if config.lr_schedule not in (None, "cosine"):
+        raise ValueError("lr_schedule must be null or cosine.")
+    if type(config.lr_warmup_epochs) is not int or not 0 <= config.lr_warmup_epochs < config.epochs:
+        raise ValueError("lr_warmup_epochs must be an integer in [0, epochs).")
+    if not math.isfinite(config.lr_min) or not 0 <= config.lr_min < config.learning_rate:
+        raise ValueError("lr_min must lie in [0, learning_rate).")
+    if config.lr_schedule is not None and config.scheduler_step_size is not None:
+        raise ValueError("Use either StepLR or lr_schedule, not both.")
 
 
 def run_training(model_config: ModelConfig, config: TrainingConfig,

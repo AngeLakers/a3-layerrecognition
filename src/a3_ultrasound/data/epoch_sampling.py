@@ -10,7 +10,7 @@ def epoch_refs(shards, seed, epoch, normal_ratio=3, positive_fraction=1.0):
         raise ValueError('Expected epoch>=1, fraction in (0,1], and frozen normal ratio 3.')
     refs=[]
     for ordinal,shard in enumerate(shards):
-        a=shard['arrays'];ids=np.flatnonzero(a['eligible'])
+        a=shard['arrays'];ids=np.flatnonzero(shard.get('sampling_eligible', a['eligible']))
         positive=ids[a['y'][ids].any(1)];negative=ids[~a['y'][ids].any(1)]
         if positive_fraction<1:
             # Fixed positive subset across epochs, shared by all Heads.
@@ -35,6 +35,8 @@ def freeze_epochs(dataset, root, *, seed, epochs, catalog_signature, positive_fr
     manifest=dict(version='a3-epoch-selection-v1.4',seed=seed,epochs=epochs,
         catalog_signature=catalog_signature,entities=dataset.entities,positive_fraction=positive_fraction,
         normal_ratio=3,order='stored refs are the complete batch order',files={})
+    if getattr(dataset, 'row_view_sha256', None) is not None:
+        manifest['row_view_sha256'] = dataset.row_view_sha256
     for epoch in range(1,epochs+1):
         path=root/f'epoch_{epoch:02d}.npy'
         refs=epoch_refs(dataset.shards,seed,epoch,positive_fraction=positive_fraction)
@@ -51,6 +53,8 @@ def use_epoch(dataset, root, epoch, *, seed, catalog_signature):
     root=Path(root);manifest=json.loads((root/'manifest.json').read_text(encoding='utf-8'))
     if manifest['seed']!=seed or manifest['entities']!=dataset.entities or manifest['catalog_signature']!=catalog_signature:
         raise ValueError('Epoch selection seed/entities/catalog mismatch.')
+    if manifest.get('row_view_sha256') != getattr(dataset, 'row_view_sha256', None):
+        raise ValueError('Epoch panel does not belong to the active role view.')
     item=manifest['files'][str(epoch)];path=root/item['file']
     if hashlib.sha256(path.read_bytes()).hexdigest()!=item['sha256']:
         raise ValueError('Frozen epoch index hash mismatch.')

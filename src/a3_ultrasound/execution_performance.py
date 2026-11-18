@@ -19,7 +19,8 @@ def fast_eval_assembly(original,x_raw,length_mask,encoder,*,output_dim):
     maximum=int(lengths.max());groups=[];indices=[]
     for value in torch.unique(lengths,sorted=True):
         length=int(value.item());selected=torch.nonzero(lengths==value,as_tuple=False).squeeze(1)
-        features=encoder(x_raw.index_select(0,selected)[:,None,:length])
+        group=x_raw.index_select(0,selected)[...,:length]
+        features=encoder(group[:,None,:] if group.ndim==2 else group)
         if features.ndim!=3 or features.shape[1]!=output_dim or features.shape[2]!=length:
             raise RuntimeError('Time-preserving encoder contract changed.')
         groups.append(torch.nn.functional.pad(features.transpose(1,2),(0,0,0,maximum-length)))

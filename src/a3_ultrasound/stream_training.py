@@ -2,12 +2,12 @@
 from __future__ import annotations
 from dataclasses import asdict
 from collections import defaultdict
-import hashlib,json,random,time
+import hashlib,json,math,random,time
 from pathlib import Path
 import numpy as np
 import torch
 from a3_ultrasound.data.streaming import RFShardDataset
-from a3_ultrasound.training import ModelConfig,TrainingConfig,TensorDataset,build_model,build_optimizer,evaluate,_validate_training_config,_code_version
+from a3_ultrasound.training import ModelConfig,TrainingConfig,TensorDataset,build_model,build_optimizer,evaluate,_validate_training_config,_code_version,scheduled_learning_rate
 from a3_ultrasound.models.losses import head_training_loss
 from a3_ultrasound.prefix_perturbation import training_conditional
 from a3_ultrasound.stream_metrics import PredictionAccumulator
@@ -74,9 +74,18 @@ def validate_fold(fold,catalog):
     if set.union(*groups)!=all_entities:raise ValueError('Split must cover catalog exactly.')
 
 
-def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
-    cfg=json.loads(Path(config_path).read_text(encoding='utf-8'))
-    if cfg.get('model',{}).get('architecture_version')=='a3-v1.6':
+def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorization=None):
+    from a3_ultrasound.v171_protocol import load_config
+    cfg=load_config(config_path)
+    from a3_ultrasound.v171_protocol import PROTOCOL as V171_PROTOCOL
+    v171 = cfg.get('protocol') == V171_PROTOCOL
+    if v171:
+        from a3_ultrasound.v171_protocol import validate_config
+        validate_config(cfg, fold_name=fold_name, seed=seed, head=head, phase='train',
+                        config_path=config_path, authorization=authorization)
+        if diagnostic:
+            raise ValueError('V1.7.1 cannot use a legacy diagnostic override.')
+    elif cfg.get('model',{}).get('architecture_version')=='a3-v1.6':
         from a3_ultrasound.v16_protocol import validate_config
         validate_config(cfg,fold_name=fold_name,seed=seed,head=head)
     v15=cfg.get('protocol')==V15_PROTOCOL
@@ -122,6 +131,7 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
     timebase = load_timebase_artifact(cfg) if v15 else None
     if model_config.physical_features and not v15:
         raise ValueError('Physical stream training requires the V1.5 normalization contract.')
+    v16=model_config.architecture_version=='a3-v1.6'
     if frozen:verify_panels(cfg,catalog_signature(catalog))
     random.seed(seed);np.random.seed(seed);torch.manual_seed(seed);torch.set_num_threads(2)
     if torch.cuda.is_available():torch.cuda.manual_seed_all(seed)
@@ -130,6 +140,8 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
     if speed.tf32 or speed.bf16_autocast or speed.cudnn_benchmark:configure_backend(speed)
     if speed.batch_size is not None:tc=TrainingConfig(**dict(asdict(tc),batch_size=speed.batch_size))
     training=dataset_from_config(runtime_cfg,'diagnostic' if diagnostic else 'train')
+    if v16 and (model_config.input_channels==2)!=(training.m3 is not None):
+        raise ValueError('Model input channels and dataset M3 channel disagree.')
     if not diagnostic and not cfg.get('epoch_selection_root'):
         selection=Path(cfg['frozen_selection_root'])/f'{fold_name}_s{seed}.npy'
         if not np.array_equal(training.refs,np.load(selection,allow_pickle=False)):
@@ -143,7 +155,9 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
     if cfg.get('epoch_selection_root'):
         use_epoch(training,cfg['epoch_selection_root'],1,seed=seed,catalog_signature=catalog_signature(catalog))
         if frozen and len(training)!=100732:raise ValueError('Frozen F1 must use all positives and 100,732 training rows per epoch.')
-    model=build_model(model_config).to(tc.device);configure_model(model,speed)
+    model = (build_model(model_config, v171=True) if v171 else build_model(model_config)).to(tc.device)
+    configure_model(model, speed)
+    loss_head = 'local_independent' if v171 and head == 'g1d' else head
     optimizer,counts=build_optimizer(model,tc,fused=speed.fused_adam)
     output=Path(output);output.mkdir(parents=True,exist_ok=False);started=time.perf_counter()
     np.save(output/'training_selection.npy',training.refs)
@@ -159,6 +173,11 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
     if cfg.get('protocol_signature'):
         resolved.update(protocol_signature=cfg['protocol_signature'],label_version=cfg.get('label_version'),
                         prediction_contract='joint-path-v2')
+    if v171:
+        from a3_ultrasound.v171_protocol import cell_identity, selection_artifacts
+        resolved.update(v171_cell=cell_identity(cfg),
+                        v171_selection=selection_artifacts(cfg), speed=speed.to_dict(),
+                        effective_lambda_local=tc.lambda_local if head == 'local_pre_independent' else 0.0)
     resolved['selection_rule']=tc.selection_rule
     resolved['architecture_version']=model_config.architecture_version
     resolved['epoch_selection_root']=cfg.get('epoch_selection_root')
@@ -173,6 +192,9 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
             resolved.update(timebase_calibration_sha256=cfg['timebase_calibration_sha256'],
                 window_jitter=cfg['window_jitter'],
                 window_jitter_identity='seed,epoch,catalog ordinal,source_row; common to all Heads; evaluation shift0')
+    if v16:
+        from a3_ultrasound.v16_protocol import runtime_record
+        resolved.update(runtime_record(cfg,fold_name,output))
     resolved.update(code_version=code_version,commit_hash=code_version.get('commit'),config_sha256=config_sha256,
                     protocol=cfg.get('protocol'),automatic_screening=False if frozen else development,old_weights_reused=False)
     if development:
@@ -193,7 +215,12 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
             perturbation=dict(attempted=0,changed=0,eligible=0)
             perturbation_hash=hashlib.sha256()
             progress(output/'progress.json',phase='training',epoch=epoch,records=0,total_records=len(training),updates_total=updates)
+            steps_per_epoch=max(1,math.ceil(len(training)/tc.batch_size));epoch_lr=[]
             for step,(batch,ids) in enumerate(training.batches(tc.batch_size,tc.device,generator=None if cfg.get('epoch_selection_root') else generator)):
+                if tc.lr_schedule is not None:
+                    lr=scheduled_learning_rate(tc,epoch-1+step/steps_per_epoch)
+                    for group in optimizer.param_groups:group['lr']=lr
+                    if step==0:epoch_lr.append(lr)
                 optimizer.zero_grad(set_to_none=True)
                 scope=speed_context(speed,batch,training=True)
                 with scope:
@@ -201,7 +228,7 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
                         out,attempt=training_conditional(model,batch,probability=tc.prefix_replacement_probability,
                             seed=seed,epoch=epoch,step=step)
                     with torch.autocast(batch.x_raw.device.type,enabled=False):
-                        loss=head_training_loss(out,batch,head_type=head,lambda_local=tc.lambda_local,
+                        loss=head_training_loss(out,batch,head_type=loss_head,lambda_local=tc.lambda_local,
                             positive_class_weight=tc.positive_class_weight,disable_local_auxiliary=tc.disable_local_auxiliary,
                             local_aux_mode=tc.local_aux_mode)
                     if speed.coalesced_finite:
@@ -223,6 +250,7 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False):
                 for value,(_,weight) in zip(values,deferred_losses):total+=value*weight
             perturbation={k:int(v) for k,v in perturbation.items()}
             record={'epoch':epoch,'train_loss':total/seen,'records':seen,'updates_total':updates}
+            if tc.lr_schedule is not None:record.update(lr_epoch_start=epoch_lr[0] if epoch_lr else None,lr_last=optimizer.param_groups[0]['lr'])
             if tc.prefix_replacement_probability:
                 record['prefix_perturbation']=dict(perturbation,attempt_sequence_sha256=perturbation_hash.hexdigest())
             if validation is not None:

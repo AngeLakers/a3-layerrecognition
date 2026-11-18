@@ -137,7 +137,7 @@ def configure_model(model,opts):
                     norm=FP32GroupNorm(child.num_groups,child.num_channels,child.eps,child.affine)
                     norm.weight=child.weight;norm.bias=child.bias;setattr(parent,name,norm)
 
-def dataset_from_config(cfg,split):
+def dataset_from_config(cfg,split, *, sampled_validation=True):
     """One RF/physical/timebase factory for train, validation, test and diagnostics."""
     from a3_ultrasound.data.streaming import RFShardDataset
     from a3_ultrasound.v15_protocol import PROTOCOL as V15_PROTOCOL,load_physical_artifacts,load_timebase_artifact
@@ -146,16 +146,27 @@ def dataset_from_config(cfg,split):
     fold=next(f for f in cfg['folds'] if f['fold']==cfg.get('fold_name',cfg['folds'][0]['fold']))
     physical,_=load_physical_artifacts(cfg) if cfg.get('protocol')==V15_PROTOCOL else (None,None)
     table=load_timebase_artifact(cfg) if cfg.get('protocol')==V15_PROTOCOL else None
+    m3=None
+    from a3_ultrasound.v16_protocol import is_v16
+    if is_v16(cfg):
+        # V1.6: frozen 2026-11-05 centres, M6 stays off, optional fold-fixed M3 channel.
+        from a3_ultrasound.v16_protocol import load_v16_timebase,verify_m6_inactive,load_m3_channel
+        verify_m6_inactive(cfg);table=load_v16_timebase(cfg);m3=load_m3_channel(cfg,fold['fold'])
     training=split in ('train','diagnostic');seed=cfg.get('seed',cfg['seeds'][0])
+    from a3_ultrasound.v171_protocol import PROTOCOL, dataset_row_view
+    row_view = dataset_row_view(cfg, split) if cfg.get('protocol') == PROTOCOL else None
     data=RFShardDataset(cfg['catalog'],fold['train' if training else split],training=training,seed=seed,
         normal_ratio=cfg['normal_to_positive'],diagnostic_per_class=cfg.get('diagnostic',{}).get('per_entity_per_class') if split=='diagnostic' else None,
         physical_config=physical,tail_policy=cfg.get('input_tail_policy'),window_policy=cfg.get('input_window_policy'),
-        timebase_config=table,window_jitter=cfg.get('window_jitter') if training else None)
+        timebase_config=table,window_jitter=cfg.get('window_jitter') if training else None,m3_config=m3,
+        row_view=row_view)
     data.speed_options=SpeedOptions(**cfg.get('speed',{}))
-    if split=='validation' and cfg.get('validation_selection_root'):
+    if split=='validation' and sampled_validation and cfg.get('validation_selection_root'):
         from a3_ultrasound.stream_training import catalog_signature
         root=Path(cfg['validation_selection_root']);p=root/(fold['fold']+'.npz');manifest=json.loads((root/'manifest.json').read_text(encoding='utf-8'))
         if manifest['catalog_signature']!=catalog_signature(data.catalog) or hashlib.sha256(p.read_bytes()).hexdigest()!=manifest['folds'][fold['fold']]['sha256']:raise ValueError('Frozen validation signature mismatch')
+        if manifest.get('validation_view_sha256') != data.row_view_sha256:
+            raise ValueError('Frozen validation panel does not belong to the active role view.')
         population=len(data);data.use_frozen_evaluation_selection(p)
         data.validation_sampling=dict(policy=manifest['policy'],selection_sha256=hashlib.sha256(p.read_bytes()).hexdigest(),
             evaluated_records=len(data),population_records=population,seed=manifest['seed'])

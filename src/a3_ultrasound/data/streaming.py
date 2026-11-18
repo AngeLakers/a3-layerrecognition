@@ -19,10 +19,12 @@ class RFShardDataset:
 
     def __init__(self, catalog_path, entities, *, training=False, seed=23,
                  normal_ratio=3, diagnostic_per_class=None, physical_config=None,
-                 tail_policy=None, window_policy=None, timebase_config=None, window_jitter=None):
+                 tail_policy=None, window_policy=None, timebase_config=None, window_jitter=None,
+                 m3_config=None, row_view=None):
         self._spawn_kwargs=dict(catalog_path=catalog_path,entities=list(entities),training=training,seed=seed,
             normal_ratio=normal_ratio,diagnostic_per_class=diagnostic_per_class,physical_config=physical_config,
-            tail_policy=tail_policy,window_policy=window_policy,timebase_config=timebase_config,window_jitter=window_jitter)
+            tail_policy=tail_policy,window_policy=window_policy,timebase_config=timebase_config,window_jitter=window_jitter,
+            m3_config=m3_config, row_view=row_view)
         self.speed_options=SpeedOptions();self._record_cache={}
         self.path=Path(catalog_path)
         self.catalog=json.loads(self.path.read_text(encoding='utf-8'))
@@ -53,6 +55,13 @@ class RFShardDataset:
             expected = physical_config.get('effective_input_config')
             if expected is not None and expected != self.config:
                 raise ValueError('Physical statistics and effective dataset input config disagree.')
+        self.m3=None
+        if m3_config is not None:
+            # V1.6 E4/E5: second channel from the same raw record, frozen centres only.
+            if timebase_config is None or physical_config is not None:
+                raise ValueError('The M3 channel requires the frozen board timebase and no physical tokens.')
+            from a3_ultrasound.data.v16_channels import M3Channel
+            self.m3=M3Channel(m3_config,self.timebase_rows,list(entities))
         self.shards=[]; refs=[]
         requested=list(entities)
         if not requested or len(set(requested))!=len(requested):
@@ -60,11 +69,43 @@ class RFShardDataset:
         registry={r['entity']:r for r in self.catalog['entities']}
         if not set(requested)<=set(registry):raise ValueError('Unknown entity.')
         self.entities=requested
+        self.row_view_sha256 = None
+        exclusion = None
+        if row_view is not None:
+            import hashlib
+            raw = Path(row_view["path"]).read_bytes()
+            self.row_view_sha256 = hashlib.sha256(raw).hexdigest()
+            if self.row_view_sha256 != row_view["sha256"]:
+                raise ValueError("Frozen row-view content mismatch.")
+            view = json.loads(raw)
+            if any(view[k] != row_view[k] for k in ("role", "fold", "target")):
+                raise ValueError("Frozen row-view role, fold or target mismatch.")
+            allowed = ("B", "C") if training else ("validation",)
+            exclusion = view["excluded_rows"]
+            if view["role"] not in allowed or set(exclusion) != set(requested):
+                raise ValueError("Frozen row-view entity or split mismatch.")
         for entity in requested:
             entry=registry[entity]; base=self.path.parent/entry['index_dir']
             arrays={k:np.load(base/f'{k}.npy',mmap_mode='r') for k in
                     ('source_row','offsets','lengths','y','label_mask','design_y','design_mask','eligible','xy','quality')}
-            ids=np.flatnonzero(arrays['eligible']) if training else np.arange(len(arrays['source_row']))
+            allowed_rows = arrays['eligible'] if training else np.ones(len(arrays['source_row']), dtype=bool)
+            if exclusion is not None:
+                from a3_ultrasound.data.v171_cohort import complete_target
+                pairs = np.asarray(exclusion[entity], dtype=np.int64).reshape(-1, 2)
+                gone = pairs[:, 0]
+                source = arrays['source_row']
+                if (np.any(gone < 0) or np.any(gone >= len(source)) or np.any(np.diff(gone) <= 0)
+                        or not np.array_equal(source[gone], pairs[:, 1]) or not allowed_rows[gone].all()):
+                    raise ValueError(f"Frozen row-view identity mismatch for {entity}.")
+                target = complete_target(entry, arrays, row_view["target"]) & allowed_rows
+                if row_view["role"] in ("B", "validation"):
+                    if not np.array_equal(gone, np.flatnonzero(target)):
+                        raise ValueError(f"Frozen target exclusions differ for {entity}.")
+                elif len(gone) != target.sum() or target[gone].any() or not (arrays['y'][gone] == 1).any(1).all():
+                    raise ValueError(f"Invalid same-board C exclusions for {entity}.")
+                allowed_rows = allowed_rows.copy()
+                allowed_rows[gone] = False
+            ids = np.flatnonzero(allowed_rows)
             rng=np.random.default_rng(np.random.SeedSequence([seed,entry['ordinal']]))
             if training:
                 positive=ids[arrays['y'][ids].any(1)]
@@ -85,7 +126,9 @@ class RFShardDataset:
             elif diagnostic_per_class is not None:
                 raise ValueError('Evaluation uses natural proportions; no diagnostic sampling.')
             if not len(ids):raise ValueError(f'No records selected for {entity}.')
-            shard=dict(entry,arrays=arrays,rf=np.load(entry['rf_path'],mmap_mode='r'))
+            shard=dict(entry,arrays=arrays,rf=np.load(self.path.parent / entry['rf_path'],mmap_mode='r'))
+            if training and exclusion is not None:
+                shard['sampling_eligible'] = allowed_rows
             ordinal=len(self.shards);self.shards.append(shard)
             refs.append(np.column_stack((np.full(len(ids),ordinal,dtype=np.int64),ids)))
         self.refs=np.concatenate(refs)
@@ -148,9 +191,14 @@ class RFShardDataset:
             if self.training and self.window_jitter is not None:
                 shift=shared_window_shift(self.window_jitter['seed'],self.jitter_epoch,
                     int(shard['ordinal']),int(a['source_row'][i]),self.window_jitter['max_shift_samples'])
-            x,meta,info=transform_trace(shard['rf'][start:start+length],shard,self.config,
+            raw=shard['rf'][start:start+length]
+            x,meta,info=transform_trace(raw,shard,self.config,
                 timebase=self.timebase_rows.get(shard['entity']),window_shift=shift,
                 skip_nominal_diagnostics=self.speed_options.fast_nominal_fixed)
+            if self.m3 is not None:
+                # Same retained prefix and the same fixed divisor as x: [2, n].
+                second=self.m3(shard['entity'],raw)[:len(x)]/np.float32(info['divisor'])
+                x=np.stack((x,second.astype(np.float32)))
             if self.physical_config is not None:
                 p=self.physical_config;tau=np.asarray(info['nominal_tof_samples'])
                 if shard['entity'] in self.timebase_rows:
@@ -166,9 +214,10 @@ class RFShardDataset:
             traces.append(x);metas.append(meta);ys.append(y);masks.append(mask);label_masks.append(lm)
             if not self.training and self.speed_options.validation_cache:
                 self._record_cache[(int(s),int(i))]=(x,meta,y,mask,lm,loc if self.physical_config else None,ctx if self.physical_config else None)
-        lengths=np.array([len(x) for x in traces]);padded=np.zeros((len(traces),int(lengths.max())),np.float32)
-        for j,x in enumerate(traces):padded[j,:len(x)]=x
-        values={'x_raw':padded,'length_mask':np.arange(padded.shape[1])[None]<lengths[:,None],
+        lengths=np.array([x.shape[-1] for x in traces])
+        padded=np.zeros((len(traces),*traces[0].shape[:-1],int(lengths.max())),np.float32)
+        for j,x in enumerate(traces):padded[j,...,:x.shape[-1]]=x
+        values={'x_raw':padded,'length_mask':np.arange(padded.shape[-1])[None]<lengths[:,None],
                 'interface_meta':np.stack(metas),'interface_mask':np.stack(masks),
                 'label_mask':np.stack(label_masks),'y':np.stack(ys)}
         if self.physical_config is not None:
@@ -232,7 +281,7 @@ class RFShardDataset:
         for j,index in enumerate(ids):
             s,i=self.refs[int(index)];n=int(host.length_mask[j].sum())
             val=lambda name:None if getattr(host,name) is None else getattr(host,name)[j].numpy().copy()
-            self._record_cache[(int(s),int(i))]=(host.x_raw[j,:n].numpy().copy(),val('interface_meta'),val('y'),val('interface_mask'),val('label_mask'),val('phys_loc'),val('phys_ctx'))
+            self._record_cache[(int(s),int(i))]=(host.x_raw[j,...,:n].numpy().copy(),val('interface_meta'),val('y'),val('interface_mask'),val('label_mask'),val('phys_loc'),val('phys_ctx'))
 
 def _identity(value):return value
 def _worker_init(_):torch.set_num_threads(1)

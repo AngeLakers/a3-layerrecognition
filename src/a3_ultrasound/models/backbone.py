@@ -216,6 +216,8 @@ class LengthGroupedTCNBackbone(nn.Module):
             )
 
         self.output_dim = channel_list[-1]
+        if use_norm == 'group8' and any(c % 8 for c in channel_list):
+            raise ValueError('GroupNorm8 requires TCN channel widths divisible by eight.')
         self.tcn = TCN(
             num_inputs=input_channels,
             num_channels=channel_list,
@@ -223,9 +225,11 @@ class LengthGroupedTCNBackbone(nn.Module):
             dilations=dilation_list,
             dropout=dropout,
             causal=False,
-            use_norm=use_norm,
+            use_norm='batch_norm' if use_norm == 'group8' else use_norm,
             input_shape="NCL",
         )
+        if use_norm == 'group8':
+            TsaiTimePreservingBackbone._replace_batch_norm(self.tcn)
 
     def forward(self, x_raw: Tensor, length_mask: Tensor) -> TemporalBackboneOutput:
         return _encode_by_valid_length(

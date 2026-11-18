@@ -212,15 +212,12 @@ class A3PCCModel(nn.Module):
             prior_sigma_samples=self.local_prior_sigma_samples,
             pre_exclude_front_end=self.pre_exclude_front_end,
         )
-        local_token_diagnostics = summarize_local_tokens(
-            local_support,
-            batch.interface_mask,
-        )
         if self.readout_scope == "full_waveform":
             local_support = (backbone_output.feature_mask.unsqueeze(1)
                              & batch.interface_mask.unsqueeze(-1))
             local_prior = local_support.to(backbone_output.features.dtype)
             local_prior = local_prior / local_prior.sum(-1, keepdim=True).clamp_min(1)
+        local_token_diagnostics = summarize_local_tokens(local_support, batch.interface_mask)
         local_output = self.local_readout(
             backbone_output.features,
             query,

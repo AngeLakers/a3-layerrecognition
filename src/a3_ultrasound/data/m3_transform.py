@@ -7,9 +7,10 @@ from __future__ import annotations
 import math
 import numpy as np
 
-def omp(D,Y):
+def omp(D,Y,G=None):
     # Batched exact OMP normal-equation solves, deterministic atom order/ties.
-    G=D.T@D;C=Y@D;n=len(Y);atoms=D.shape[1];selected=np.zeros((n,8),dtype=int);coef=np.zeros((n,8));counts=np.zeros(n,dtype=int);alive=np.ones(n,dtype=bool);norm=(Y*Y).sum(1);relres=norm.copy()
+    # G may be the cached Gram matrix D.T@D of a fixed dictionary.
+    G=D.T@D if G is None else G;C=Y@D;n=len(Y);atoms=D.shape[1];selected=np.zeros((n,8),dtype=int);coef=np.zeros((n,8));counts=np.zeros(n,dtype=int);alive=np.ones(n,dtype=bool);norm=(Y*Y).sum(1);relres=norm.copy()
     for step in range(8):
         ids=np.flatnonzero(alive)
         if not len(ids):break
@@ -60,20 +61,42 @@ def dictionary(centers, length, params):
     return np.stack(atoms,1),np.stack(copies,1),np.asarray(deep),lo,hi
 
 
+class Decomposer:
+    """Fixed per-(board, record length) M3 operator; build once, apply many times.
+
+    The dictionary and its Gram matrix depend only on the frozen centres, the
+    fold-fitted scalars and the record length, never on labels or the record.
+    """
+
+    def __init__(self, centers, length, params):
+        self.length=int(length)
+        self.identity=params.get('status')=='IDENTITY_FALLBACK'
+        if self.identity:return
+        self.D,self.C,self.deep,self.lo,self.hi=dictionary(centers,self.length,params)
+        self.W=self.D[self.lo:self.hi];self.G=self.W.T@self.W
+
+    def __call__(self, x):
+        x=np.asarray(x,dtype=float)
+        if x.ndim!=2 or x.shape[1]!=self.length or not np.isfinite(x).all():
+            raise ValueError('Finite [N,T] RF of the prepared length required.')
+        if self.identity:
+            return x.astype(np.float32),np.zeros_like(x,dtype=np.float32)
+        lo,hi=self.lo,self.hi
+        selected,coef,counts=omp(self.W,x[:,lo:hi],self.G)
+        multiple=np.zeros_like(x);free=np.zeros_like(x)
+        for i,count in enumerate(counts):
+            ids=selected[i,:count]; weights=coef[i,:count]
+            multiple[i,lo:hi]=self.C[lo:hi,ids]@weights
+            mask=self.deep[ids]
+            if mask.any():free[i]=self.D[:,ids[mask]]@weights[mask]
+        return (x-multiple).astype(np.float32),free.astype(np.float32)
+
+
 def transform(x, centers, params):
+    """r = x - m_hat (reverberation copies only), d = free deep reconstruction."""
     x=np.asarray(x,dtype=float)
     if x.ndim!=2 or not np.isfinite(x).all():raise ValueError('Finite [N,T] RF required.')
-    if params.get('status')=='IDENTITY_FALLBACK':
-        return x.astype(np.float32),np.zeros_like(x,dtype=np.float32)
-    D,C,deep,lo,hi=dictionary(centers,x.shape[1],params)
-    selected,coef,counts=omp(D[lo:hi],x[:,lo:hi])
-    multiple=np.zeros_like(x);free=np.zeros_like(x)
-    for i,count in enumerate(counts):
-        ids=selected[i,:count]; weights=coef[i,:count]
-        multiple[i,lo:hi]=C[lo:hi,ids]@weights
-        mask=deep[ids]
-        if mask.any():free[i]=D[:,ids[mask]]@weights[mask]
-    return (x-multiple).astype(np.float32),free.astype(np.float32)
+    return Decomposer(centers,x.shape[1],params)(x)
 
 
 def _features(x, centers, delta):
