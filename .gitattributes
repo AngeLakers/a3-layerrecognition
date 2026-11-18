@@ -5,3 +5,7 @@ reports/v152_timebase_calibration.md text eol=lf
 artifacts/v1.5.3/*.json text eol=lf
 configs/experiment/v1_5_3_freeze.json text eol=lf
 reports/v153_speed_final.md text eol=lf
+
+# Preserve the exact A5/C model and adapter bytes recorded in r3.1.
+scripts/a3_v17_g1d_model.py -text whitespace=cr-at-eol
+scripts/a3_v17_g1d_runner_full.py -text whitespace=cr-at-eol
