@@ -153,11 +153,11 @@ def head_training_loss(output: HeadStepOutput, batch: InterfaceBatch, *, head_ty
                        local_aux_mode: str | None = None) -> PCCLossOutput:
     """Dispatch the main loss; lambda=0 is an explicitly named ablation only."""
     validate_complete_training_batch(batch)
-    if head_type not in ("local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux", "proposed_v15"):
+    if head_type not in ("local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux", "proposed_v15", "state_conditioned_gru"):
         raise ValueError("Unknown head_type for training loss.")
     if local_aux_mode not in (None, "all", "clean_upstream"):
         raise ValueError("local_aux_mode must be all or clean_upstream.")
-    clean_upstream = (head_type == "proposed_shadow_aux" if local_aux_mode is None
+    clean_upstream = (head_type in ("proposed_shadow_aux", "state_conditioned_gru") if local_aux_mode is None
                       else local_aux_mode == "clean_upstream")
     if disable_local_auxiliary:
         if lambda_local != 0 or head_type == "local_independent":

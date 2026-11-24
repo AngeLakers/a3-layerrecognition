@@ -1,0 +1,25 @@
+schema_version: a3-run-v1.3
+model:
+  architecture_version: a3-v1.8
+  head_type: state_conditioned_gru
+  backbone: resnet1d
+  backbone_norm: group8
+  canonical_per_trace: false
+  query_view: position2
+  input_channels: 1
+  query_dim: 64
+  token_dim: 64
+  local_prior_sigma_samples: 40.0
+  local_prior_strength: 0.5
+training:
+  seed: 23
+  epochs: 2
+  batch_size: 4
+  device: cpu
+  lambda_local: 0.3
+  local_aux_mode: clean_upstream
+  prefix_replacement_probability: 0.0
+  real_training_permitted: false
+data:
+  source: synthetic
+  samples_per_split: 8

@@ -102,14 +102,19 @@ def scheduled_learning_rate(config: TrainingConfig, progress: float) -> float:
 
 
 def build_model(config: ModelConfig, *, v171: bool = False) -> A3Model:
-    if config.architecture_version not in ("a3-v1.3", "a3-v1.4", "a3-v1.5", "a3-v1.6"):
+    if config.architecture_version not in ("a3-v1.3", "a3-v1.4", "a3-v1.5", "a3-v1.6", "a3-v1.8"):
         raise ValueError("Unknown architecture_version.")
-    if config.architecture_version in ("a3-v1.4", "a3-v1.5", "a3-v1.6") and (config.backbone_norm != "group8" or config.query_view != "position2"):
+    if config.architecture_version in ("a3-v1.4", "a3-v1.5", "a3-v1.6", "a3-v1.8") and (config.backbone_norm != "group8" or config.query_view != "position2"):
         raise ValueError("V1.4 requires group8 and position2.")
     if type(config.input_channels) is not int or config.input_channels not in (1, 2):
         raise ValueError("input_channels must be 1 or 2.")
     if config.architecture_version != "a3-v1.6" and config.input_channels != 1:
         raise ValueError("Legacy architectures require one channel.")
+    v18 = config.architecture_version == "a3-v1.8"
+    if config.head_type == "state_conditioned_gru" and not v18:
+        raise ValueError("The state-conditioned GRU requires a3-v1.8.")
+    if v18 and (config.physical_features or config.head_type not in ("local_pre_independent", "state_conditioned_gru")):
+        raise ValueError("V1.8 supports the single-RF LP and state-conditioned GRU pair.")
     global_head = v171 and config.head_type == 'g1d'
     if config.architecture_version == "a3-v1.6":
         legacy_head = config.head_type in ("local_independent", "local_pre_independent", "vanilla_chain")
@@ -124,7 +129,7 @@ def build_model(config: ModelConfig, *, v171: bool = False) -> A3Model:
     if config.backbone == "tcn":
         if config.backbone_stage != "final_pre_pool":
             raise ValueError("TCN smoke supports final_pre_pool only.")
-        if v171:
+        if v171 or v18:
             backbone = LengthGroupedTCNBackbone(channels=(128, 128, 128), kernel_size=5,
                                                dilations=(1, 2, 4), use_norm='group8', input_channels=1)
         else:
@@ -615,7 +620,7 @@ def synthetic_datasets(seed: int, samples_per_split: int = 8) -> dict[str, Tenso
 
 def load_checkpoint(path: Path, *, device: str = "cpu") -> tuple[A3Model, dict[str, Any]]:
     checkpoint = torch.load(path, map_location=device, weights_only=True)
-    if checkpoint.get("architecture_version") not in ("a3-v1.3", "a3-v1.4", "a3-v1.5", "a3-v1.6"):
+    if checkpoint.get("architecture_version") not in ("a3-v1.3", "a3-v1.4", "a3-v1.5", "a3-v1.6", "a3-v1.8"):
         raise ValueError("Expected a V1.3 checkpoint from the common runner.")
     model = build_model(ModelConfig(**checkpoint["resolved_config"]["model"])).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])

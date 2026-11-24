@@ -14,7 +14,7 @@ from torch.nn import functional as F
 from a3_ultrasound.inference.enumerator import enumerate_binary_chain
 from a3_ultrasound.models.baselines import LocalPreIndependentStep
 from a3_ultrasound.models.capacity import head_baseline_parameter_counts
-from a3_ultrasound.models.integrated import HEAD_TYPES
+from a3_ultrasound.models.integrated import LEGACY_HEAD_TYPES
 from a3_ultrasound.models.losses import head_training_loss, pcc_training_loss, validate_complete_training_batch
 from a3_ultrasound.models.pcc import PCCConditionalStep, validate_prefix_states
 from a3_ultrasound.training import (
@@ -32,7 +32,7 @@ def small_cpu_workloads():
     torch.set_num_threads(previous)
 
 
-@pytest.mark.parametrize("head_type", HEAD_TYPES)
+@pytest.mark.parametrize("head_type", LEGACY_HEAD_TYPES)
 def test_all_heads_forward_backward_optimizer_exact_and_label_isolation(head_type):
     torch.manual_seed(7)
     model = build_model(ModelConfig(head_type=head_type, backbone="tcn"))
@@ -152,7 +152,7 @@ def test_nonzero_dependent_chain_raw_probabilities_marginals_map_and_training_nl
     assert exact.map_states[0].tolist() == paths[raw.argmax()].tolist()
 
 
-@pytest.mark.parametrize("head_type", HEAD_TYPES)
+@pytest.mark.parametrize("head_type", LEGACY_HEAD_TYPES)
 def test_training_rejects_partial_labels_but_inference_accepts_them(head_type):
     model = build_model(ModelConfig(head_type=head_type, backbone="tcn"))
     batch = synthetic_datasets(7, 4)["train"].batch
@@ -191,7 +191,7 @@ def test_explicit_ablation_variants_and_empty_pre_have_finite_gradients():
         build_model(ModelConfig(backbone="tcn", readout_scope="full_waveform"))
 
 
-@pytest.mark.parametrize("head_type", HEAD_TYPES)
+@pytest.mark.parametrize("head_type", LEGACY_HEAD_TYPES)
 def test_common_training_checkpoint_and_exact_evaluation_roundtrip(tmp_path, head_type):
     data = synthetic_datasets(31, 4)
     config = TrainingConfig(epochs=1, batch_size=3, seed=31)

@@ -152,6 +152,10 @@ def dataset_from_config(cfg,split, *, sampled_validation=True):
         # V1.6: frozen 2026-11-05 centres, M6 stays off, optional fold-fixed M3 channel.
         from a3_ultrasound.v16_protocol import load_v16_timebase,verify_m6_inactive,load_m3_channel
         verify_m6_inactive(cfg);table=load_v16_timebase(cfg);m3=load_m3_channel(cfg,fold['fold'])
+    elif cfg.get("model", {}).get("architecture_version") == "a3-v1.8":
+        from a3_ultrasound.v16_protocol import load_v16_timebase, verify_m6_inactive
+        verify_m6_inactive(cfg)
+        table = load_v16_timebase(cfg)
     training=split in ('train','diagnostic');seed=cfg.get('seed',cfg['seeds'][0])
     from a3_ultrasound.v171_protocol import PROTOCOL, dataset_row_view
     row_view = dataset_row_view(cfg, split) if cfg.get('protocol') == PROTOCOL else None
