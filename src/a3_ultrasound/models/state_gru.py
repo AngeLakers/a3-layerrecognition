@@ -9,7 +9,7 @@ class StateConditionedGRUStep(nn.Module):
     """Score from the local window and preceding history, then write W_s z."""
 
     def __init__(self, wave_dim: int, query_dim: int, token_dim: int, prefix_dim: int,
-                 hidden_dim: int, local_base_type: LocalBaseType, local_base_hidden_dim: int):
+                 hidden_dim: int, local_base_type: LocalBaseType, local_base_hidden_dim: int, *, shared_write: bool = False):
         super().__init__()
         # As in LP, the classifier sees local evidence and interface position.
         self.local_token = nn.Sequential(nn.Linear(wave_dim + query_dim, token_dim), nn.LayerNorm(token_dim))
@@ -17,7 +17,7 @@ class StateConditionedGRUStep(nn.Module):
         self.classifier = nn.Sequential(nn.Linear(token_dim + prefix_dim, hidden_dim), nn.GELU(),
                                         nn.Linear(hidden_dim, 1))
         self.write_zero = nn.Linear(wave_dim, prefix_dim, bias=False)
-        self.write_one = nn.Linear(wave_dim, prefix_dim, bias=False)
+        self.write_one = None if shared_write else nn.Linear(wave_dim, prefix_dim, bias=False)
         self.gru = nn.GRUCell(query_dim + prefix_dim, prefix_dim)
 
     def forward(self, r_loc: Tensor, r_ctx: Tensor, r_gate: Tensor, query: Tensor,
@@ -25,8 +25,9 @@ class StateConditionedGRUStep(nn.Module):
         states = validate_prefix_states(prefix_states, interface_mask)
         # Only the actual local waveform vector enters the state-specific projection.
         previous = r_loc[:, :-1]
-        writes = torch.where(states[:, :-1, None].bool(), self.write_one(previous),
-                             self.write_zero(previous))
+        writes = self.write_zero(previous)
+        if self.write_one is not None:
+            writes = torch.where(states[:, :-1, None].bool(), self.write_one(previous), writes)
         inputs = torch.cat((query[:, :-1], writes), dim=-1)
         hidden = r_loc.new_zeros((r_loc.size(0), self.gru.hidden_size))
         history = [hidden]

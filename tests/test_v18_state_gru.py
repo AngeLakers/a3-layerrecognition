@@ -57,3 +57,26 @@ def test_synthetic_config_trains_and_reloads_identical_predictions(tmp_path):
     run_from_config(config, restored, checkpoint_path=trained / summary["selected_checkpoint"],
                     evaluate_split="validation")
     assert (restored / "validation_predictions.jsonl").read_bytes() == (trained / "validation_predictions.jsonl").read_bytes()
+
+
+@pytest.mark.parametrize("head", ["local_pre_independent", "state_conditioned_gru", "waveform_only_gru"])
+def test_patch_geometry_and_memory_ablation(head):
+    cfg = ModelConfig(**(FIXED_MODEL | {"architecture_version": "a3-v1.8"}),
+                      head_type=head, backbone="patchtst")
+    model = build_model(cfg).eval()
+    batch = synthetic_datasets(23, 4)["train"].batch
+    encoded = model.encode(batch)
+    centers = encoded.backbone.feature_centers
+    torch.testing.assert_close(centers[0, :3], torch.tensor([7.5, 11.5, 15.5]))
+    assert encoded.backbone.feature_mask.sum(1).tolist() == [11, 13, 11, 13]
+    dirty = replace(batch, x_raw=batch.x_raw.masked_fill(~batch.length_mask, 1000))
+    torch.testing.assert_close(model.encode(dirty).backbone.features, encoded.backbone.features)
+    exact = model.infer_encoded(encoded)
+    torch.testing.assert_close(exact.raw_log_normalizer, torch.zeros_like(exact.raw_log_normalizer))
+    if head == "waveform_only_gru":
+        assert model.head.write_one is None
+        other = torch.where(batch.interface_mask, 1 - batch.y, batch.y)
+        torch.testing.assert_close(model.conditional(encoded, batch.y).logits, model.conditional(encoded, other).logits)
+    out = model.conditional(encoded, batch.y)
+    head_training_loss(out, batch, head_type=head, local_aux_mode="clean_upstream").total.backward()
+    assert model.backbone.encoder.W_P.weight.grad.abs().sum() > 0

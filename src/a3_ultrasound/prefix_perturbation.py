@@ -24,7 +24,7 @@ def training_conditional(model, batch, *, probability=0., seed=23, epoch=1, step
     validate_complete_training_batch(batch)
     if not math.isfinite(probability) or not 0 <= probability <= 1:
         raise ValueError('prefix replacement probability must be in [0, 1].')
-    if model.head_type == "state_conditioned_gru" and probability != 0:
+    if model.head_type in ("state_conditioned_gru", "waveform_only_gru") and probability != 0:
         raise ValueError("State-conditioned GRU training requires true prefixes.")
     if probability == 0 or model.head_type not in ('vanilla_chain', 'proposed_v15'):
         return model(batch, batch.y).conditional, dict(attempted=0, changed=0, eligible=0,

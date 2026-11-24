@@ -111,9 +111,9 @@ def build_model(config: ModelConfig, *, v171: bool = False) -> A3Model:
     if config.architecture_version != "a3-v1.6" and config.input_channels != 1:
         raise ValueError("Legacy architectures require one channel.")
     v18 = config.architecture_version == "a3-v1.8"
-    if config.head_type == "state_conditioned_gru" and not v18:
+    if config.head_type in ("state_conditioned_gru", "waveform_only_gru") and not v18:
         raise ValueError("The state-conditioned GRU requires a3-v1.8.")
-    if v18 and (config.physical_features or config.head_type not in ("local_pre_independent", "state_conditioned_gru")):
+    if v18 and (config.physical_features or config.head_type not in ("local_pre_independent", "state_conditioned_gru", "waveform_only_gru")):
         raise ValueError("V1.8 supports the single-RF LP and state-conditioned GRU pair.")
     global_head = v171 and config.head_type == 'g1d'
     if config.architecture_version == "a3-v1.6":
@@ -126,7 +126,12 @@ def build_model(config: ModelConfig, *, v171: bool = False) -> A3Model:
         raise ValueError("rho must use the registered candidates 1, 2, 3.")
     if config.common_feature_dim != 64:
         raise ValueError("The common V1.3 adapter output must be D_h=64.")
-    if config.backbone == "tcn":
+    if config.backbone == "patchtst":
+        if not v18 or config.backbone_stage != "final_pre_pool":
+            raise ValueError("PatchTST requires v1.8 pre-head temporal tokens.")
+        from a3_ultrasound.models.patchtst import PatchTSTBackbone
+        backbone = PatchTSTBackbone()
+    elif config.backbone == "tcn":
         if config.backbone_stage != "final_pre_pool":
             raise ValueError("TCN smoke supports final_pre_pool only.")
         if v171 or v18:

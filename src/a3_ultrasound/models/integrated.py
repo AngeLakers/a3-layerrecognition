@@ -36,9 +36,9 @@ from a3_ultrasound.models.responsibility_tokens import (
 from a3_ultrasound.schema import InterfaceBatch
 
 
-HeadType = Literal["local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux", "proposed_v15", "state_conditioned_gru"]
+HeadType = Literal["local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux", "proposed_v15", "state_conditioned_gru", "waveform_only_gru"]
 LEGACY_HEAD_TYPES = ("local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux", "proposed_v15")
-HEAD_TYPES = (*LEGACY_HEAD_TYPES, "state_conditioned_gru")
+HEAD_TYPES = (*LEGACY_HEAD_TYPES, "state_conditioned_gru", "waveform_only_gru")
 
 
 @dataclass(frozen=True)
@@ -140,13 +140,13 @@ class A3PCCModel(nn.Module):
             attention_dim=attention_dim,
             prior_strength=local_prior_strength,
         )
-        self.pre_readout = None if head_type == "state_conditioned_gru" else IndexedReadout(
+        self.pre_readout = None if head_type in ("state_conditioned_gru", "waveform_only_gru") else IndexedReadout(
             feature_dim=common_feature_dim,
             query_dim=query_dim if pre_query_conditioned else None,
             attention_dim=attention_dim,
             owns_empty_context=True,
         )
-        self.responsibility_projector = None if head_type == "state_conditioned_gru" else ResponsibilityTokenProjector(
+        self.responsibility_projector = None if head_type in ("state_conditioned_gru", "waveform_only_gru") else ResponsibilityTokenProjector(
             local_dim=common_feature_dim,
             context_dim=common_feature_dim,
             query_dim=query_dim,
@@ -164,12 +164,12 @@ class A3PCCModel(nn.Module):
         elif head_type == "local_pre_independent":
             self.pcc = LocalPreIndependentStep(
                 **common, context_dim=context_dim, hidden_dim=pcc_hidden_dim)
-        elif head_type == "state_conditioned_gru":
+        elif head_type in ("state_conditioned_gru", "waveform_only_gru"):
             if physical_features:
                 raise ValueError("The state-conditioned waveform memory expects single RF evidence.")
             self.pcc = StateConditionedGRUStep(
                 common_feature_dim, query_dim, token_dim, prefix_dim, pcc_hidden_dim,
-                local_base_type, local_base_hidden_dim,
+                local_base_type, local_base_hidden_dim, shared_write=head_type == "waveform_only_gru",
             )
         elif head_type == "vanilla_chain":
             self.pcc = VanillaClassifierChainStep(
