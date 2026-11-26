@@ -34,3 +34,13 @@
 本轮交付模块代码；全量M3缓存CLI、数据集缓存身份/折绑定、训练runner完整接入、真实D2、分组报告图导出及最终协议冻结尚未完成。M3调用方仍须检查所有折×族的BOUNDARY_LIMITED并暂停整个M3阶段。未生成真实缓存、未训练、未运行outer、未打freeze标签。
 
 已有未提交的数据准备产物、IDE配置、原始RF/标签、凭据和研究结果不包含在本轮代码提交中。
+
+## 2026-11-06 补充接入（Claude 审查后修改）
+
+- **训练入口接入 v1.6 输入。** 修改前 `speed.dataset_from_config` / `stream_training.train` 只在 `protocol == V1.5` 时加载 timebase，v1.6 配置因 `board_timebase` 窗口策略缺 timebase 会在建数据集时报错（不会静默运行）。现在 `is_v16(cfg)` 时：`load_v16_timebase` 校验冻结表（sha、version、13 板、中心递增、底面在最深中心之后）；`verify_m6_inactive` 确认继承 v1.5.3 的 M6 关闭决定；`runtime_record` 把 timebase、M6、speed decision（及双通道时的 M3 清单和 D2 决定）原字节复制进输出目录并写入 resolved_config。
+- **M3 第二通道改为按折参数在线计算，不写 RF 大小的缓存。** 每折只保存拟合清单（各板族 f0、带宽、α、δ、状态，以及 13 板的板族归属）。`data/v16_channels.M3Channel` 在数据管线里对同一条原始记录做固定变换，截到与 x 相同的前缀、同样除以 131，得到 `[2, n]`；窗口抖动只改 interface_meta，因此两通道逐点对齐并共用 length mask。`m3_transform.Decomposer` 按（板, 记录长度）缓存字典和 Gram 矩阵，结果与 `transform` 逐位相同；单条记录约 0.5 ms（2 核 CPU）。
+- **双通道守门。** `validate_config` 要求双通道格提供 `m3_fit_manifest`、`m3_d2_decision` 及其 sha256，单通道格必须为空；`load_m3_channel` 校验 D2 状态 DECIDED 且选中的通道与配置一致、D2 使用的正是该折清单、清单为该折 TRAIN 面板与冻结 timebase 拟合、无 BOUNDARY_LIMITED。训练时模型 `input_channels` 与数据集是否带 M3 必须一致。验证缓存和 `fast_eval_assembly` 支持 `[B,2,T]`。
+- **脚本。** `scripts/a3_v16_m3_fit.py`（每折拟合，任一族 δ=±24 → 清单状态 PAUSED_BOUNDARY_LIMITED，退出码 3）；`scripts/a3_v16_d2.py`（五折验证板，Hilbert 包络峰值，Mann-Whitney AUC 与 AP，每板每 K:上游|深层 类最多 5000 条，`SeedSequence([20261106, fold_index, board_ordinal])`；INSUFFICIENT 退出码 4）。λ 网格沿用 RULES_T2_R3：1e-6、1e-4、1e-2、1、100。
+- **D2 数据不足规则（Claude 提议，待 Brandon 确认）。** 一行有效 = 两类都有（AUC 有定义）且拟合时该上游状态的深层正常记录 ≥200。K2:0、K2:1 必须 5 个事件全有效（4/5 计数以 5 为分母）；K3:00/01/10 有效事件 ≥3 即用有效事件取中位数，剔除的事件写入决定文件；不满足 → INSUFFICIENT，停在 E4/E5 训练之前报告，不默认取消。
+- **指标。** 新增 `attribution_overcall_of_abnormal` / `attribution_undercall_of_abnormal`（同一错层事件，以全部异常样本为分母）；`pooled_reliability` 汇总 K2+K3 的 top-label ECE、HCE0.9、Coverage、风险覆盖（不是各 K 的 ECE 平均）。
+- 测试：`tests/test_v16_pipeline.py` 12 项 + 原 13 项通过；全套 476 通过，19 项失败与修改前相同（本环境未安装 tsai 等）。真实数据上未运行拟合、D2 或训练。

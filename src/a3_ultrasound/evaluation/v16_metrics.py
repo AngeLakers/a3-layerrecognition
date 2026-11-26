@@ -98,6 +98,10 @@ def joint_metrics(y, probabilities, weights, *, log_probabilities=None):
         detection_recall=ratio(detected, positive, w),
         attribution_overcall=ratio(((pred_bits==1)&(y==0)).any(1), attribution, w),
         attribution_undercall=ratio(((pred_bits==0)&(y==1)).any(1), attribution, w),
+        # Same events over ALL abnormal records: the share of abnormal samples
+        # whose detected joint state contains a false layer / misses a layer.
+        attribution_overcall_of_abnormal=ratio(attribution & ((pred_bits==1)&(y==0)).any(1), positive, w),
+        attribution_undercall_of_abnormal=ratio(attribution & ((pred_bits==0)&(y==1)).any(1), positive, w),
         interface_map_recall=[ratio(pred_bits[:,j]==1, y[:,j]==1, w) for j in range(k)],
         joint_nll=mean(nll), joint_brier=mean(brier),
         calibration=calibration(confidence, correct, w),
@@ -115,3 +119,26 @@ def joint_metrics(y, probabilities, weights, *, log_probabilities=None):
             joint_error=ratio(~correct, mask, w),
             joint_nll=float(np.dot(w[mask],nll[mask])/den) if den else None)
     return result
+
+
+def pooled_reliability(parts):
+    """Overall top-label reliability across K2 and K3 evaluations.
+
+    parts: iterable of (y, probabilities, weights) with complete labels. Joint
+    state spaces differ (4 vs 8 states), so only top-label quantities pool:
+    confidence = max posterior, correct = joint MAP equals truth. ECE uses the
+    same 15 equal-IPW-mass bins on the pooled records; it is not an average of
+    per-K ECE values.
+    """
+    confidence=[];correct=[];weights=[];positive=[]
+    for y,p,w in parts:
+        y,p,w=_inputs(y,p,w)
+        truth=y@(2**np.arange(y.shape[1]-1,-1,-1))
+        confidence.append(p.max(1));correct.append(p.argmax(1)==truth);weights.append(w);positive.append(truth!=0)
+    if not confidence:raise ValueError('At least one evaluation part is required.')
+    c=np.concatenate(confidence);z=np.concatenate(correct);w=np.concatenate(weights);pos=np.concatenate(positive)
+    high=c>=.9;everything=np.ones(len(c),bool)
+    return dict(calibration=calibration(c,z,w),hce_0_9=ratio(~z,high,w),coverage_0_9=ratio(high,everything,w),
+        risk_coverage={name:risk_coverage(c[m],(~z)[m],w[m]) for name,m in
+                       [('all',everything),('abnormal',pos),('normal',~pos)]},
+        scope='pooled K2+K3 top-label; IPW weights unchanged')

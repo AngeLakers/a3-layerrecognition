@@ -275,7 +275,10 @@
     "selection_rule": "guarded_joint",
     "outer_evaluation_permitted": false,
     "local_aux_mode": "clean_upstream",
-    "prefix_replacement_probability": 0.2
+    "prefix_replacement_probability": 0.2,
+    "lr_schedule": "cosine",
+    "lr_warmup_epochs": 2,
+    "lr_min": 1e-05
   },
   "normal_to_positive": 3,
   "formal_training_permitted": false,
@@ -350,5 +353,9 @@
   },
   "speed_decision_path": "artifacts/v1.5.3/speed_decision.json",
   "speed_decision_sha256": "405f579a1de0ecc22e5fe500efe0ece103a37a148657b298df70e7fe3756a0ba",
-  "m3_channel": "none"
+  "m3_channel": "none",
+  "m3_fit_manifest": null,
+  "m3_fit_manifest_sha256": null,
+  "m3_d2_decision": null,
+  "m3_d2_decision_sha256": null
 }
