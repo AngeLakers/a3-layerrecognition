@@ -182,6 +182,7 @@ class IndexedReadout(nn.Module):
         *,
         owns_empty_context: bool | None = None,
         prior_strength: float = 1.0,
+        relative_time_attention: bool = False,
     ) -> None:
         super().__init__()
         if not math.isfinite(prior_strength) or prior_strength < 0:
@@ -195,6 +196,10 @@ class IndexedReadout(nn.Module):
         )
         self.score_projection = nn.Linear(attention_dim, 1, bias=False)
         self.score_bias = nn.Parameter(torch.zeros(attention_dim))
+        if relative_time_attention:
+            self.relative_time_weight = nn.Parameter(torch.zeros(attention_dim))
+        else:
+            self.register_parameter("relative_time_weight", None)
         if owns_empty_context is None:
             owns_empty_context = query_dim is None
         if owns_empty_context:
@@ -211,6 +216,7 @@ class IndexedReadout(nn.Module):
         *,
         local_prior: Tensor | None = None,
         allow_empty_context: bool = False,
+        relative_time: Tensor | None = None,
     ) -> ReadoutOutput:
         if features.ndim != 3 or support_mask.ndim != 3:
             raise ValueError("features/support_mask must have shapes [B, L, D] and [B, K, L].")
@@ -234,11 +240,20 @@ class IndexedReadout(nn.Module):
         has_support = valid.any(dim=-1)
         if not fast_structure() and not allow_empty_context and torch.any(interface_mask & ~has_support):
             raise ValueError("An effective Local support is empty; check TOF/stride contract.")
+        if self.relative_time_weight is not None:
+            if relative_time is None or relative_time.shape != support_mask.shape:
+                raise ValueError("Relative time must match the readout support shape.")
+            if fast_structure():
+                torch._assert_async(torch.all(~interface_mask | has_support), "M1 has an empty effective support.")
+        elif relative_time is not None:
+            raise ValueError("Relative time was supplied to a readout without a relative time input.")
 
         hidden = self.feature_projection(features).unsqueeze(1) + self.score_bias
         if self.query_projection is not None:
             assert query is not None
             hidden = hidden + self.query_projection(query).unsqueeze(2)
+        if self.relative_time_weight is not None:
+            hidden = hidden + relative_time.unsqueeze(-1) * self.relative_time_weight
         scores = self.score_projection(torch.tanh(hidden)).squeeze(-1)
         if local_prior is not None and self.prior_strength != 0:
             # BF16 epsilon would floor the frozen Gaussian into a different prior.

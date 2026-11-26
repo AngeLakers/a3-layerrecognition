@@ -88,6 +88,7 @@ class A3PCCModel(nn.Module):
         local_base_hidden_dim: int = 32,
         head_type: HeadType = "proposed",
         readout_scope: Literal["indexed", "full_waveform"] = "indexed",
+        relative_time_attention: bool = False,
         pre_query_conditioned: bool = False,
         local_prior_sigma_samples: float | None = None,
         local_prior_strength: float = 1.0,
@@ -123,6 +124,8 @@ class A3PCCModel(nn.Module):
         if readout_scope == "full_waveform" and head_type != "local_independent":
             raise ValueError("full_waveform ablation is restricted to local_independent.")
         self.head_type = head_type
+        if relative_time_attention and (head_type != "local_independent" or token_dim != common_feature_dim):
+            raise ValueError("Relative-time readout requires the independent head and a matching token width.")
         self.physical_features = physical_features
         self.pre_exclude_front_end = pre_exclude_front_end
         self.readout_scope = readout_scope
@@ -139,19 +142,21 @@ class A3PCCModel(nn.Module):
             query_dim=query_dim,
             attention_dim=attention_dim,
             prior_strength=local_prior_strength,
+            relative_time_attention=relative_time_attention,
         )
-        self.pre_readout = None if head_type in ("state_conditioned_gru", "waveform_only_gru") else IndexedReadout(
+        uses_pre = not relative_time_attention and head_type not in ("state_conditioned_gru", "waveform_only_gru")
+        self.pre_readout = IndexedReadout(
             feature_dim=common_feature_dim,
             query_dim=query_dim if pre_query_conditioned else None,
             attention_dim=attention_dim,
             owns_empty_context=True,
-        )
-        self.responsibility_projector = None if head_type in ("state_conditioned_gru", "waveform_only_gru") else ResponsibilityTokenProjector(
+        ) if uses_pre else None
+        self.responsibility_projector = ResponsibilityTokenProjector(
             local_dim=common_feature_dim,
             context_dim=common_feature_dim,
             query_dim=query_dim,
             token_dim=token_dim,
-        )
+        ) if uses_pre else None
         local_dim = token_dim + int(physical_features)
         context_dim = token_dim + 3*int(physical_features)
         gate_dim = token_dim + 4*int(physical_features)
@@ -227,12 +232,19 @@ class A3PCCModel(nn.Module):
             local_prior = local_support.to(backbone_output.features.dtype)
             local_prior = local_prior / local_prior.sum(-1, keepdim=True).clamp_min(1)
         local_token_diagnostics = summarize_local_tokens(local_support, batch.interface_mask)
+        relative_time = None
+        if self.local_readout.relative_time_weight is not None:
+            centers = backbone_output.feature_centers
+            if centers.ndim == 1:
+                centers = centers.unsqueeze(0)
+            relative_time = (centers.float().unsqueeze(1) - nominal_tof.float().unsqueeze(-1)) / 80.0
         local_output = self.local_readout(
             backbone_output.features,
             query,
             local_support,
             batch.interface_mask,
             local_prior=local_prior if self.readout_scope == "indexed" else None,
+            relative_time=relative_time,
         )
         if self.pre_readout is None:
             # Preserve the diagnostic/output shapes without computing a Pre readout.

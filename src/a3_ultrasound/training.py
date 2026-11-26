@@ -51,6 +51,7 @@ class ModelConfig:
     local_base_type: str = "mlp"
     local_base_hidden_dim: int = 32
     readout_scope: str = "indexed"
+    relative_time_attention: bool = False
     pre_query_conditioned: bool = False
     local_prior_sigma_samples: float | None = None
     local_prior_strength: float = 1.0
@@ -113,7 +114,12 @@ def build_model(config: ModelConfig, *, v171: bool = False) -> A3Model:
     v18 = config.architecture_version == "a3-v1.8"
     if config.head_type in ("state_conditioned_gru", "waveform_only_gru") and not v18:
         raise ValueError("The state-conditioned GRU requires a3-v1.8.")
-    if v18 and (config.physical_features or config.head_type not in ("local_pre_independent", "state_conditioned_gru", "waveform_only_gru")):
+    v18_heads = ("local_pre_independent", "state_conditioned_gru", "waveform_only_gru")
+    if config.relative_time_attention:
+        if not v18 or config.backbone != "resnet1d" or config.head_type != "local_independent":
+            raise ValueError("M1 relative time requires the v1.8 ResNet independent head.")
+        v18_heads += ("local_independent",)
+    if v18 and (config.physical_features or config.head_type not in v18_heads):
         raise ValueError("V1.8 supports the single-RF LP and state-conditioned GRU pair.")
     global_head = v171 and config.head_type == 'g1d'
     if config.architecture_version == "a3-v1.6":
