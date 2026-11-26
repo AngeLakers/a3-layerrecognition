@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "a3-ultrasound"
-version = "1.4.0"
+version = "1.8.0"
 description = "A3 fixed-interface multi-interface state-inference prototype"
 readme = "README.md"
 requires-python = ">=3.11"

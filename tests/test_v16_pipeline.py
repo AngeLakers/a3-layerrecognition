@@ -255,7 +255,7 @@ def test_fit_and_d2_runners_touch_only_their_panels(frozen, tmp_path):
     for fold in cfg['folds']:
         manifest,path=fit_fold(cfg,fold['fold'],timebase,tmp_path/'m3')
         assert manifest['train_entities']==fold['train'] and len(manifest['entity_family'])==13
-        assert set(json.loads((tmp_path/'m3'/manifest['side_files']['sampled_identities']['path']).read_text())) == set(fold['train'])
+        assert set(json.loads((tmp_path/'m3'/manifest['side_files']['sampled_identities']['path']).read_text(encoding='utf-8'))) == set(fold['train'])
         # Only 24 records per board here: every family falls back to identity (r=x, d=0).
         assert {p['status'] for p in manifest['family_params'].values()}=={'IDENTITY_FALLBACK'}
         raw=path.read_bytes();manifests[fold['fold']]=(json.loads(raw),hashlib.sha256(raw).hexdigest())

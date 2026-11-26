@@ -1,9 +1,9 @@
-"""A3 V1.4 fixed-interface inference and versioned training utilities.
+"""A3 fixed-interface inference and versioned training utilities.
 
 Software validation does not establish research performance claims.
 """
 
-__version__ = "1.4.0"
+__version__ = "1.8.0"
 
 from .schema import (
     INTERFACE_META_DIM,
