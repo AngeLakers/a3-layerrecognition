@@ -1,0 +1,253 @@
+"""Cloud stages: cache frozen features, fit a calibration working point, fit a residual, report."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import numpy as np
+import torch
+from torch.nn import functional as F
+
+from a3_ultrasound.v185_cloud import read, role_dataset
+from a3_ultrasound.speed import SpeedOptions, configure_backend, configure_model, precision_context, speed_context
+from a3_ultrasound.training import ModelConfig, build_model
+from a3_ultrasound.inference.partial_report import state_probabilities, partial_report
+from a3_ultrasound.models.shallow_review import ShallowReview, eligible_donors
+
+
+@torch.inference_mode()
+def extract(config, run, role, device):
+    cfg = read(config)
+    summary = read(run/"summary.json")
+    key = hashlib.sha256(config.read_bytes()).hexdigest()
+    if (summary["config_sha256"] != key or summary["guard_violated"] is not False
+            or summary["status"] != "COMPLETED" or summary["selected_checkpoint"] != "best_guarded.pt"):
+        raise ValueError("Expected matching guarded checkpoint")
+    path = run/summary["selected_checkpoint"]
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    if checkpoint["resolved_config"]["config_sha256"] != key:
+        raise ValueError("Checkpoint/config mismatch")
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    speed = SpeedOptions(**cfg.get("speed", {}))
+    configure_backend(speed)
+    model = build_model(ModelConfig(**cfg["model"])).to(device).eval()
+    configure_model(model,speed)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    data = role_dataset(cfg, role)
+    fold = cfg["folds"][0]["fold"]
+    panel = config.parent/role/f"{fold}.npz"
+    if hashlib.sha256(panel.read_bytes()).hexdigest() != read(panel.parent/"manifest.json")["folds"][fold]["sha256"]:
+        raise ValueError("Frozen role panel mismatch")
+    data.use_frozen_evaluation_selection(panel)
+    fields = {k: [] for k in ("h","z","tau","valid","y","known")}
+    sample_ids, boards, weights = [], [], []
+    for batch, ids in data.batches(cfg.get("evaluation_batch_size", 16), device):
+        with speed_context(speed,batch), precision_context(speed):
+            enc = model.encode(batch)
+            prefix = torch.zeros_like(batch.interface_mask, dtype=torch.long)
+            z = model.conditional(enc, prefix).logits
+        values=(enc.local_readout.token, z, batch.interface_meta[...,1], batch.interface_mask,batch.y,batch.label_mask)
+        for (name, buffer), value in zip(fields.items(),values):
+            pad = model.max_interfaces - value.shape[1]
+            buffer.append(F.pad(value.cpu(), (0,0,0,pad) if name=="h" else (0,pad)))
+        for i,anno in zip(ids,data.annotations(ids)):
+            sid, board = data.identity(i)
+            sample_ids.append(sid)
+            boards.append(board)
+            weights.append(anno["sample_weight"])
+    return dict(**{k:torch.cat(v) for k,v in fields.items()},sample_ids=sample_ids,boards=boards,
+                weights=torch.tensor(weights),role=role, config=key,checkpoint=hashlib.sha256(path.read_bytes()).hexdigest())
+
+
+def report(z, valid, temperature, knob, mode, locked=None, frozen=None):
+    result=torch.full_like(z,-1,dtype=torch.long)
+    for k in torch.unique(valid.sum(1)).tolist():
+        at=(valid.sum(1)==k).nonzero().flatten()
+        values=z[at,:k]
+        prob=state_probabilities(values,temperature)
+        if mode in ("cost","additive"):
+            result[at,:k]=partial_report(prob,k,point_fee=knob,exchange=float(mode=="cost"),
+                                         locked=None if locked is None else locked[at,:k],
+                                         frozen=None if frozen is None else frozen[at,:k])[0]
+        else:
+            a=(values>0).long()
+            confidence=torch.sigmoid(values.abs()/temperature)
+            if mode=="whole":
+                a[prob.max(1).values<knob]=-1
+            elif mode=="layer":
+                a[confidence<knob]=-1
+            elif mode!="map":
+                raise ValueError("Unknown decision mode")
+            result[at,:k]=a
+    return result
+
+
+def board_weights(cache):
+    w=cache["weights"].double().clone()
+    _,groups=np.unique(cache["boards"],return_inverse=True)
+    for g in np.unique(groups):
+        at=torch.from_numpy(groups==g)
+        w[at]/=w[at].sum()
+    return w/w.sum()
+
+
+def fit_policy(c,budget):
+    z,y,v=c["z"],c["y"],c["valid"]
+    mask=v & c["known"]
+    w=board_weights(c)
+    complete=(mask==v).all(1)
+    if not complete.any(): raise ValueError("Calibration requires complete reliable records")
+    def nll(t):
+        loss=F.binary_cross_entropy_with_logits(z/t,y.clamp_min(0).float(),reduction="none")
+        return (w[complete]*(loss*mask).sum(1)[complete]).sum().item()
+    temp=min((1.,.5,.75,1.25,1.5,2.,3.),key=nll)
+    if not 0 <= budget <= 1:
+        raise ValueError("Review budget must be between zero and one")
+    normal = complete & ~((y == 1) & v).any(1)
+    normal_w = w.clone().masked_fill(~normal, 0.)
+    board_ids = np.array(c["boards"])
+    for board in np.unique(board_ids):
+        at = torch.from_numpy(board_ids == board)
+        mass = normal_w[at].sum()
+        if mass > 0:
+            normal_w[at] /= mass
+    normal_weight = normal_w.sum().item()
+    operating_points = {}
+    knobs={}
+    achieved={}
+    for mode in ("whole","layer","additive","cost"):
+        candidates=np.linspace(0,1,101) if mode in ("whole","layer") else np.linspace(0,2,81)
+        choices=[]
+        for knob in candidates:
+            action=report(z,v,temp,float(knob),mode)
+            rate=w[((action==-1)&v).any(1)].sum().item()
+            if rate<=budget+1e-9:
+                fp = normal_w[normal & ((action == 1) & v).any(1)].sum().item()
+                fpr = fp/normal_weight if normal_weight else None
+                passes = fpr is not None and fpr <= .02 + 1e-9
+                choices.append((not passes,budget-rate,float(knob),rate,fpr))
+        if not choices:
+            raise ValueError(f"No calibration operating point within budget for {mode}")
+        failed,_,knobs[mode],achieved[mode],fpr=min(choices)
+        operating_points[mode] = dict(normal_fpr=fpr,guard_met=not failed)
+    return dict(temperature=temp,knobs=knobs,achieved=achieved,operating_points=operating_points,budget=budget,checkpoint=c["checkpoint"])
+
+
+def review_inputs(c,policy):
+    t=policy["temperature"]
+    a=report(c["z"],c["valid"],t,policy["knobs"]["cost"],"cost")
+    return (c["h"],c["z"],c["tau"],c["valid"],a,torch.sigmoid(c["z"]/t))
+
+
+def fit_review(c,policy,mode):
+    torch.manual_seed(23)
+    inputs=review_inputs(c,policy)
+    model=ShallowReview(c["h"].size(-1),mode)
+    opt=torch.optim.AdamW(model.parameters(),lr=.001,weight_decay=0)
+    supervised=0
+    for epoch in range(10):
+        for ix in torch.randperm(len(c["z"])).split(256):
+            z,active=model(*(v[ix] for v in inputs))
+            known=active & c["known"][ix]
+            if not known.any(): continue
+            weights=c["weights"][ix,None].expand_as(z)[known]
+            loss=F.binary_cross_entropy_with_logits(z[known],c["y"][ix][known].float(),reduction="none")
+            opt.zero_grad(); (loss*weights).sum().div(weights.sum()).backward();opt.step()
+            if epoch==0:supervised+=int(known.sum())
+    if not supervised:raise ValueError("No eligible supervised review targets")
+    return dict(mode=mode,state=model.state_dict(),targets=supervised,policy=policy)
+
+
+def shuffled_source(c, inputs):
+    """Permute only the donor representation, within board, slot, sign and confidence bin."""
+    h, _, _, valid, action, prob = inputs
+    source = h.clone()
+    rng = torch.Generator().manual_seed(23)
+    _, boards = np.unique(c["boards"], return_inverse=True)
+    board = torch.from_numpy(boards)
+    confidence = torch.maximum(prob, 1-prob)
+    for k in range(h.size(1)-1):
+        trusted = valid[:, k] & action[:, k].ne(-1) & confidence[:, k].ge(.9)
+        group = board*4 + action[:, k]*2 + confidence[:, k].ge(.95).long()
+        for g in torch.unique(group[trusted]):
+            ids = (trusted & group.eq(g)).nonzero().flatten()
+            order = ids[torch.randperm(len(ids), generator=rng)]
+            source[order, k] = h[order.roll(1), k]
+    return source
+
+
+@torch.no_grad()
+def evaluate(c,policy,head,mode,out,shuffle=False):
+    z,v=c["z"],c["valid"]
+    initial=report(z,v,policy["temperature"],policy["knobs"]["cost"],"cost")
+    donors = eligible_donors(v, initial, torch.sigmoid(z/policy["temperature"]))
+    eligible = v & initial.eq(-1) & donors.any(-1)
+    active=torch.zeros_like(v)
+    updated=z
+    if head:
+        if mode!="cost" or head["policy"]!=policy: raise ValueError("Residual requires its original policy")
+        model=ShallowReview(c["h"].size(-1),head["mode"])
+        model.load_state_dict(head["state"])
+        inputs=review_inputs(c,policy)
+        source = shuffled_source(c, inputs) if shuffle else None
+        if shuffle and head["mode"] != "features":
+            raise ValueError("Shuffle requires the feature head")
+        updated,active=model(*inputs, shallow_features=source)
+        # Only initial pending, eligible slots may change. Others retain their initial action.
+        action=report(updated,v,policy["temperature"],policy["knobs"][mode],mode,locked=initial,frozen=~active)
+        action=torch.where(active,action,initial)
+    else:
+        if shuffle: raise ValueError("Shuffle requires a fitted feature head")
+        action=report(z,v,policy["temperature"],policy["knobs"].get(mode,0),mode)
+    with out.open("x",encoding="utf-8") as f:
+        for i,k in enumerate(v.sum(1).tolist()):
+            row=dict(sample_id=c["sample_ids"][i],board=c["boards"][i],weight=float(c["weights"][i]),
+                     logits=z[i,:k].tolist(),final_logits=updated[i,:k].tolist(),temperature=policy["temperature"],
+                     truth=c["y"][i,:k].tolist(),known=c["known"][i,:k].tolist(),initial=initial[i,:k].tolist(),
+                     calibration_guard_met=policy["operating_points"].get(mode,{}).get("guard_met"),
+                     eligible=eligible[i,:k].tolist(),map=(z[i,:k]>0).long().tolist(),report=action[i,:k].tolist(),active=active[i,:k].tolist())
+            f.write(json.dumps(row,ensure_ascii=False)+"\n")
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    sub=parser.add_subparsers(dest="op",required=True)
+    cache=sub.add_parser("cache")
+    cache.add_argument("config",type=Path); cache.add_argument("run",type=Path)
+    cache.add_argument("role",choices=("residual_fit","calibration_workpoint","dev_evaluation"))
+    cache.add_argument("--device",default="cuda")
+    for op in ("calibrate","fit-review","evaluate"):
+        subp=sub.add_parser(op)
+        subp.add_argument("cache",type=Path)
+        if op=="calibrate":subp.add_argument("--budget",type=float,default=.1)
+        else:subp.add_argument("policy",type=Path)
+        if op=="fit-review":subp.add_argument("mode",choices=("self","scores","features"))
+        if op=="evaluate":
+            subp.add_argument("--mode",choices=("map","whole","layer","additive","cost"),default="cost")
+            subp.add_argument("--head",type=Path)
+            subp.add_argument("--shuffle",action="store_true")
+    for subp in sub.choices.values():subp.add_argument("output",type=Path)
+    a=parser.parse_args()
+    if a.output.exists():raise FileExistsError(a.output)
+    if a.op=="cache": result=extract(a.config,a.run,a.role,a.device)
+    else:
+        c=torch.load(a.cache,map_location="cpu",weights_only=True)
+        role={"calibrate":"calibration_workpoint","fit-review":"residual_fit","evaluate":"dev_evaluation"}[a.op]
+        if c["role"]!=role:raise ValueError("Invalid role for operation")
+        if a.op=="calibrate":result=fit_policy(c,a.budget)
+        else:
+            policy=read(a.policy)
+            if policy["checkpoint"]!=c["checkpoint"]:raise ValueError("Checkpoint mismatch")
+            if a.op=="fit-review":result=fit_review(c,policy,a.mode)
+            else:
+                head=torch.load(a.head,map_location="cpu",weights_only=True) if a.head else None
+                evaluate(c,policy,head,a.mode,a.output,a.shuffle)
+                return
+    if a.op=="calibrate":a.output.write_text(json.dumps(result,indent=2),encoding="utf-8")
+    else:torch.save(result,a.output)
+
+
+if __name__=="__main__":
+    main()
+

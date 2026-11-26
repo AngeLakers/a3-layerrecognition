@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from a3_ultrasound.models.combination_cost import combination_cost
 
 import torch
 from torch import Tensor
@@ -150,7 +151,8 @@ def head_training_loss(output: HeadStepOutput, batch: InterfaceBatch, *, head_ty
                        lambda_local: float = 0.3,
                        positive_class_weight: float | Tensor | None = None,
                        disable_local_auxiliary: bool = False,
-                       local_aux_mode: str | None = None) -> PCCLossOutput:
+                       local_aux_mode: str | None = None,
+                       v185_loss: str = "nll", layer_weights: tuple[float, ...] | None = None) -> PCCLossOutput:
     """Dispatch the main loss; lambda=0 is an explicitly named ablation only."""
     validate_complete_training_batch(batch)
     if head_type not in ("local_independent", "local_pre_independent", "vanilla_chain", "proposed", "proposed_shadow_aux", "proposed_v15", "state_conditioned_gru", "waveform_only_gru"):
@@ -165,9 +167,32 @@ def head_training_loss(output: HeadStepOutput, batch: InterfaceBatch, *, head_ty
     elif lambda_local not in (0.1, 0.3, 1.0):
         raise ValueError("Main lambda_local candidates are 0.1, 0.3, 1.0; zero requires explicit ablation.")
     effective_lambda = 0.0 if head_type == "local_independent" else lambda_local
-    return pcc_training_loss(output.logits, output.base_logodds, batch.y, batch.interface_mask,
+    if v185_loss not in ("nll", "weighted", "additive", "exchange"):
+        raise ValueError("Unknown v185_loss")
+    if v185_loss != "nll" and (head_type != "local_independent" or positive_class_weight is not None):
+        raise ValueError("v1.8.5 comparisons require an independent head and an unweighted base loss.")
+    result = pcc_training_loss(output.logits, output.base_logodds, batch.y, batch.interface_mask,
                              label_mask=batch.label_mask, positive_class_weight=positive_class_weight,
                              lambda_local=effective_lambda, shadow_auxiliary=clean_upstream)
+    if v185_loss == "nll":
+        return result
+    mask = batch.interface_mask
+    if batch.label_mask is not None and not torch.equal(mask, batch.label_mask):
+        raise ValueError("v1.8.5 needs complete reliable labels.")
+    if v185_loss == "weighted":
+        if not layer_weights or any(not math.isfinite(x) or x <= 0 for x in layer_weights):
+            raise ValueError("Supply finite positive weights from the training entities.")
+        if len(layer_weights) < mask.shape[1] and mask[:,len(layer_weights):].any():
+            raise ValueError("No training class weight for a valid target layer.")
+        values = list(layer_weights[:mask.shape[1]])
+        values.extend([1.] * (mask.shape[1] - len(values)))
+        z = output.logits.float().masked_fill(~mask, 0)
+        y = batch.y.masked_fill(~mask, 0).float()
+        terms = F.binary_cross_entropy_with_logits(z, y, pos_weight=z.new_tensor(values), reduction="none")
+        per_point = (terms * mask).sum(1) / mask.sum(1)
+        return replace(result, total=per_point.mean(), chain=per_point.mean(), per_sample_chain=per_point)
+    cost = combination_cost(output.logits, batch.y, mask, exchange=v185_loss == "exchange")
+    return replace(result, total=result.total + cost.mean())
 
 
 __all__ = ["PCCLossOutput", "pcc_training_loss", "head_training_loss", "validate_complete_training_batch"]

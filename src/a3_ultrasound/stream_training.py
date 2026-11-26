@@ -230,7 +230,7 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
                     with torch.autocast(batch.x_raw.device.type,enabled=False):
                         loss=head_training_loss(out,batch,head_type=loss_head,lambda_local=tc.lambda_local,
                             positive_class_weight=tc.positive_class_weight,disable_local_auxiliary=tc.disable_local_auxiliary,
-                            local_aux_mode=tc.local_aux_mode)
+                            local_aux_mode=tc.local_aux_mode, v185_loss=tc.v185_loss, layer_weights=tc.layer_weights)
                     if speed.coalesced_finite:
                         loss.total.backward();finish_step(model,loss.total)
                     else:

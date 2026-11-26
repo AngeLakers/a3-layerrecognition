@@ -57,6 +57,7 @@ class ModelConfig:
     local_prior_strength: float = 1.0
     physical_features: bool = False
     pre_exclude_front_end: int | None = None
+    reference_bias: str = "none"
     input_channels: int = 1
 
 
@@ -85,6 +86,8 @@ class TrainingConfig:
     lr_schedule: str | None = None
     lr_warmup_epochs: int = 0
     lr_min: float = 0.0
+    v185_loss: str = "nll"
+    layer_weights: tuple[float, ...] | None = None
 
 
 def scheduled_learning_rate(config: TrainingConfig, progress: float) -> float:
@@ -116,8 +119,8 @@ def build_model(config: ModelConfig, *, v171: bool = False) -> A3Model:
         raise ValueError("The state-conditioned GRU requires a3-v1.8.")
     v18_heads = ("local_pre_independent", "state_conditioned_gru", "waveform_only_gru")
     if config.relative_time_attention:
-        if not v18 or config.backbone != "resnet1d" or config.head_type != "local_independent":
-            raise ValueError("M1 relative time requires the v1.8 ResNet independent head.")
+        if not v18 or config.backbone not in ("resnet1d", "patchtst", "tcn", "inceptiontime") or config.head_type != "local_independent":
+            raise ValueError("M1 relative time requires a registered v1.8 temporal encoder and independent head.")
         v18_heads += ("local_independent",)
     if v18 and (config.physical_features or config.head_type not in v18_heads):
         raise ValueError("V1.8 supports the single-RF LP and state-conditioned GRU pair.")
@@ -478,7 +481,7 @@ def run_training(model_config: ModelConfig, config: TrainingConfig,
         head_training_loss(first_output, first_batch, head_type=model.head_type,
                            lambda_local=config.lambda_local, positive_class_weight=config.positive_class_weight,
                            disable_local_auxiliary=config.disable_local_auxiliary,
-                           local_aux_mode=config.local_aux_mode)
+                           local_aux_mode=config.local_aux_mode, v185_loss=config.v185_loss, layer_weights=config.layer_weights)
     optimizer, parameter_counts = build_optimizer(model, config)
     scheduler = (torch.optim.lr_scheduler.StepLR(optimizer, config.scheduler_step_size, config.scheduler_gamma)
                  if config.scheduler_step_size is not None else None)
@@ -519,7 +522,7 @@ def run_training(model_config: ModelConfig, config: TrainingConfig,
                 loss = head_training_loss(output, batch, head_type=model.head_type,
                                           lambda_local=config.lambda_local, positive_class_weight=config.positive_class_weight,
                                           disable_local_auxiliary=config.disable_local_auxiliary,
-                                          local_aux_mode=config.local_aux_mode)
+                                          local_aux_mode=config.local_aux_mode, v185_loss=config.v185_loss, layer_weights=config.layer_weights)
                 if not torch.isfinite(loss.total):
                     raise RuntimeError("Non-finite training loss.")
                 loss.total.backward()

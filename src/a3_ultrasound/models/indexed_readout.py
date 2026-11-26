@@ -217,6 +217,7 @@ class IndexedReadout(nn.Module):
         local_prior: Tensor | None = None,
         allow_empty_context: bool = False,
         relative_time: Tensor | None = None,
+        score_bonus: Tensor | None = None,
     ) -> ReadoutOutput:
         if features.ndim != 3 or support_mask.ndim != 3:
             raise ValueError("features/support_mask must have shapes [B, L, D] and [B, K, L].")
@@ -260,6 +261,8 @@ class IndexedReadout(nn.Module):
             if options().bf16_autocast:scores=scores.float();local_prior=local_prior.float()
             eps = torch.finfo(scores.dtype).eps
             scores = scores + self.prior_strength * torch.log(local_prior.clamp_min(eps))
+        if score_bonus is not None:
+            scores = scores.float() + score_bonus
         masked_scores = scores.masked_fill(~valid, float("-inf"))
         # All-masked rows must be finite BEFORE softmax to avoid NaN gradients.
         masked_scores = torch.where(has_support.unsqueeze(-1), masked_scores, 0.0)

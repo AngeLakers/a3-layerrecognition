@@ -95,6 +95,7 @@ class A3PCCModel(nn.Module):
         query_view: str = "position2",
         physical_features: bool = False,
         pre_exclude_front_end: int | None = None,
+        reference_bias: str = "none",
     ) -> None:
         super().__init__()
         if any(
@@ -128,6 +129,11 @@ class A3PCCModel(nn.Module):
             raise ValueError("Relative-time readout requires the independent head and a matching token width.")
         self.physical_features = physical_features
         self.pre_exclude_front_end = pre_exclude_front_end
+        if reference_bias not in ("none", "symmetric", "late", "early"):
+            raise ValueError("Invalid reference bias")
+        if reference_bias != "none" and not (relative_time_attention and readout_scope == "full_waveform"):
+            raise ValueError("Reference bias requires global time-aware readout")
+        self.reference_bias = reference_bias
         self.readout_scope = readout_scope
         self.pre_query_conditioned = pre_query_conditioned
         self.local_prior_sigma_samples = local_prior_sigma_samples
@@ -238,13 +244,22 @@ class A3PCCModel(nn.Module):
             if centers.ndim == 1:
                 centers = centers.unsqueeze(0)
             relative_time = (centers.float().unsqueeze(1) - nominal_tof.float().unsqueeze(-1)) / 80.0
+        score_bonus = None
+        if self.reference_bias != "none":
+            left, right = {"symmetric": (40., 40.), "late": (32., 48.), "early": (48., 32.)}[self.reference_bias]
+            widths = torch.where(relative_time < 0, left, right)
+            # Same scale factor across all three arms. Final valid slot has no successor.
+            scale = torch.ones_like(nominal_tof)
+            gap = nominal_tof[:, 1:] - nominal_tof[:, :-1]
+            scale[:, :-1] = torch.where(batch.interface_mask[:, 1:], (gap / 96.).clamp(1e-6, 1.), 1.)
+            score_bonus = .25 * torch.exp(-.5 * (relative_time * 80 / (widths * scale.unsqueeze(-1))).square())
         local_output = self.local_readout(
             backbone_output.features,
             query,
             local_support,
             batch.interface_mask,
             local_prior=local_prior if self.readout_scope == "indexed" else None,
-            relative_time=relative_time,
+            relative_time=relative_time, score_bonus=score_bonus,
         )
         if self.pre_readout is None:
             # Preserve the diagnostic/output shapes without computing a Pre readout.
