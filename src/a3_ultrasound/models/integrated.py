@@ -96,6 +96,7 @@ class A3PCCModel(nn.Module):
         physical_features: bool = False,
         pre_exclude_front_end: int | None = None,
         reference_bias: str = "none",
+        stage1_donor: str = "none",
     ) -> None:
         super().__init__()
         if any(
@@ -169,7 +170,15 @@ class A3PCCModel(nn.Module):
         common = dict(local_dim=local_dim, local_base_type=local_base_type,
                       local_base_hidden_dim=local_base_hidden_dim)
         # Retain the 'pcc' module key for compatibility with historical state_dicts.
-        if head_type == "local_independent":
+        if stage1_donor not in ("none", "score", "feature"):
+            raise ValueError("Unknown Stage 1 donor mode")
+        if stage1_donor != "none":
+            if head_type != "local_independent" or not relative_time_attention:
+                raise ValueError("Stage 1 donor requires relative-time independent logits")
+            from a3_ultrasound.models.baselines import AdjacentDonorStep
+            self.pcc = AdjacentDonorStep(local_dim, mode=stage1_donor, hidden_dim=local_base_hidden_dim,
+                                         local_base_type=local_base_type)
+        elif head_type == "local_independent":
             self.pcc = IndependentConditionalStep(
                 local_dim, hidden_dim=local_base_hidden_dim, local_base_type=local_base_type)
         elif head_type == "local_pre_independent":

@@ -34,3 +34,6 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra"
+
+[tool.setuptools.package-data]
+a3_ultrasound = ["v186_inputs.json"]

@@ -22,6 +22,8 @@ class HeadStepOutput:
     gate: Tensor | None = None
     prefix_hidden: Tensor | None = None
     upstream_flag: Tensor | None = None
+    score_only_logits: Tensor | None = None
+    donor_projection: Tensor | None = None
 
 
 # Keep the historical constructor/output name for existing PCC callers.

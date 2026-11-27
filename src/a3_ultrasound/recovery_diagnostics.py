@@ -17,7 +17,7 @@ class BoardLayerDiagnostics:
             return
         complete_abnormal = all(row["label_mask"]) and any(row["y"])
         for layer, (truth, known, logit, action) in enumerate(
-            zip(row["y"], row["label_mask"], row["base_logodds"], row["map_states"]), 1
+            zip(row["y"], row["label_mask"], row.get("stage1_logits", row["base_logodds"]), row["map_states"]), 1
         ):
             if known:
                 weight = row["sample_weight"]

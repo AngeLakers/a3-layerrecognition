@@ -44,6 +44,27 @@ class IndependentConditionalStep(nn.Module):
         )
 
 
+class AdjacentDonorStep(IndependentConditionalStep):
+    """A single non-recursive contribution from the preceding interface query."""
+
+    def __init__(self, local_dim, *, mode, hidden_dim, local_base_type):
+        super().__init__(local_dim, hidden_dim=hidden_dim, local_base_type=local_base_type)
+        self.score_scale = nn.Parameter(torch.zeros(()))
+        self.projection = nn.Parameter(torch.zeros(local_dim)) if mode == "feature" else None
+
+    def forward(self, r_loc, r_ctx, r_gate, query, prefix_states, interface_mask):
+        local = super().forward(r_loc, r_ctx, r_gate, query, prefix_states, interface_mask).logits
+        # Shift once, using the same raw predecessor score at training and inference.
+        score = self.score_scale * (2 * local[:, :-1].sigmoid() - 1)
+        score_logits = local + torch.nn.functional.pad(score, (1, 0)) * interface_mask
+        if self.projection is None:
+            return BaselineStepOutput(score_logits, local, score_only_logits=score_logits)
+        donor = (r_loc[:, :-1] * self.projection).sum(dim=-1)
+        donor = torch.nn.functional.pad(donor, (1, 0)) * interface_mask
+        return BaselineStepOutput(score_logits + donor, local,
+                                  score_only_logits=score_logits, donor_projection=donor)
+
+
 class LocalPreIndependentStep(nn.Module):
     """Fuse Local and Pre observations without output-state dependencies."""
 

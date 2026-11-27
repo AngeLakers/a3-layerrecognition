@@ -59,6 +59,7 @@ class ModelConfig:
     pre_exclude_front_end: int | None = None
     reference_bias: str = "none"
     input_channels: int = 1
+    stage1_donor: str = "none"
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,10 @@ def build_model(config: ModelConfig, *, v171: bool = False) -> A3Model:
         raise ValueError("Unknown head_type.")
     if config.rho not in (1.0, 2.0, 3.0):
         raise ValueError("rho must use the registered candidates 1, 2, 3.")
+    if config.stage1_donor != "none" and not (v18 and config.backbone == "resnet1d"
+            and config.relative_time_attention and config.token_dim == config.common_feature_dim == 128
+            and config.readout_scope == "full_waveform" and config.head_type == "local_independent"):
+        raise ValueError("Stage 1 donor requires the repaired ResNet1D readout.")
     wide_readout = config.relative_time_attention and config.readout_scope == "full_waveform"
     allowed_feature_dims = (64, 128) if wide_readout else (64,)
     if config.common_feature_dim not in allowed_feature_dims:
@@ -335,7 +340,8 @@ def evaluate(model: A3Model, data: TensorDataset, *, batch_size: int = 16,
                        diagnostic.base_logodds, base_probabilities,
                        exact.conditional_probability_range, encoded.local_token_diagnostics.counts,
                        diagnostic.gate, diagnostic.correction, gate_correction,
-                       raw_gate_correction, diagnostic.upstream_flag)
+                       raw_gate_correction, diagnostic.upstream_flag, diagnostic.score_only_logits,
+                       diagnostic.donor_projection, diagnostic.logits if diagnostic.score_only_logits is not None else None)
             cpu_fields = {id(tensor): tensor.cpu() for tensor in tensors if tensor is not None}
             counts = batch.interface_mask.sum(1).cpu().tolist()
             path_masks = exact.path_mask.cpu()
@@ -368,6 +374,11 @@ def evaluate(model: A3Model, data: TensorDataset, *, batch_size: int = 16,
                     "correction": values(diagnostic.correction) if diagnostic.correction is not None else None,
                     "gate_times_correction": values(gate_correction) if gate_correction is not None else None,
                 }
+                if diagnostic.score_only_logits is not None:
+                    row["stage1_score_logits"] = values(diagnostic.score_only_logits)
+                    row["stage1_logits"] = values(diagnostic.logits)
+                    if diagnostic.donor_projection is not None:
+                        row["stage1_donor_projection"] = values(diagnostic.donor_projection)
                 if diagnostic.correction is not None:
                     eligible = (cpu_fields[id(diagnostic.correction)] if speed_options is not None and speed_options.cpu_correction else diagnostic.correction)[i, 1:k]
                     row["correction_saturation_fraction"] = (float((eligible.abs() >= 0.95 * model.head.rho).float().mean())
