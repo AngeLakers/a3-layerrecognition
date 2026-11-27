@@ -1,5 +1,6 @@
 """Cloud stages: cache frozen features, fit a calibration working point, fit a residual, report."""
 import argparse
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -11,7 +12,7 @@ from torch.nn import functional as F
 
 from a3_ultrasound.v185_cloud import read, role_dataset
 from a3_ultrasound.speed import SpeedOptions, configure_backend, configure_model, precision_context, speed_context
-from a3_ultrasound.training import ModelConfig, build_model
+from a3_ultrasound.training import ModelConfig, TrainingConfig, build_model, scheduled_learning_rate
 from a3_ultrasound.inference.partial_report import state_probabilities, partial_report
 from a3_ultrasound.models.shallow_review import ShallowReview, eligible_donors
 
@@ -57,7 +58,8 @@ def extract(config, run, role, device):
             boards.append(board)
             weights.append(anno["sample_weight"])
     return dict(**{k:torch.cat(v) for k,v in fields.items()},sample_ids=sample_ids,boards=boards,
-                weights=torch.tensor(weights),role=role, config=key,checkpoint=hashlib.sha256(path.read_bytes()).hexdigest())
+                weights=torch.tensor(weights),role=role, config=key,loss_arm=cfg["training"]["v185_loss"],
+                checkpoint=hashlib.sha256(path.read_bytes()).hexdigest())
 
 
 def report(z, valid, temperature, knob, mode, locked=None, frozen=None):
@@ -131,7 +133,13 @@ def fit_policy(c,budget):
             raise ValueError(f"No calibration operating point within budget for {mode}")
         failed,_,knobs[mode],achieved[mode],fpr=min(choices)
         operating_points[mode] = dict(normal_fpr=fpr,guard_met=not failed)
-    return dict(temperature=temp,knobs=knobs,achieved=achieved,operating_points=operating_points,budget=budget,checkpoint=c["checkpoint"])
+    support = {}
+    for board in np.unique(board_ids):
+        at = torch.from_numpy(board_ids == board)
+        support[str(board)] = dict(K=int(v[at].sum(1).unique().item()), points=int(at.sum()),
+                                   complete=int(complete[at].sum()), normal=int(normal[at].sum()))
+    return dict(temperature=temp,knobs=knobs,achieved=achieved,operating_points=operating_points,
+                budget=budget,checkpoint=c["checkpoint"],calibration_boards=support)
 
 
 def review_inputs(c,policy):
@@ -140,23 +148,80 @@ def review_inputs(c,policy):
     return (c["h"],c["z"],c["tau"],c["valid"],a,torch.sigmoid(c["z"]/t))
 
 
-def fit_review(c,policy,mode):
+def review_targets(cache, policy):
+    inputs = review_inputs(cache, policy)
+    _, _, _, valid, action, p = inputs
+    known = valid & action.eq(-1) & eligible_donors(valid, action, p).any(-1) & cache["known"]
+    weight = known.double() * cache["weights"][:, None]
+    board_ids = np.asarray(cache["boards"])
+    support = {}
+    for board in np.unique(board_ids):
+        at = torch.from_numpy(board_ids == board)
+        support[str(board)] = known[at].sum(0).tolist()
+        mass = weight[at].sum()
+        if mass > 0:
+            weight[at] /= mass
+    rows = known.any(1)
+    weight = weight[rows]
+    if rows.any():
+        weight *= int(rows.sum()) / weight.sum()
+    return tuple(t[rows] for t in inputs), cache["y"][rows], weight, support
+
+
+def review_bce(z, y, weights, temperature):
+    terms = F.binary_cross_entropy_with_logits(z / temperature, y.clamp_min(0).float(), reduction="none")
+    return (terms * weights).sum() / len(y)
+
+
+def fit_review(c,policy,mode,stop_cache):
+    if (c["role"] != "residual_fit" or stop_cache["role"] != "early_stop"
+            or c["checkpoint"] != stop_cache["checkpoint"] or c["checkpoint"] != policy["checkpoint"]
+            or c["config"] != stop_cache["config"] or c["loss_arm"] != "exchange"
+            or stop_cache["loss_arm"] != "exchange"):
+        raise ValueError("Review fitting needs residual and stopping caches from the same exchange model")
+    fit_boards, stop_boards = set(c["boards"]), set(stop_cache["boards"])
+    calibration_boards = set(policy["calibration_boards"])
+    if fit_boards & stop_boards or (fit_boards | stop_boards) & calibration_boards:
+        raise ValueError("Review training, stopping and calibration boards must be disjoint")
     torch.manual_seed(23)
-    inputs=review_inputs(c,policy)
+    inputs, y, weights, fit_support = review_targets(c, policy)
+    stop_inputs, stop_y, stop_weights, stop_support = review_targets(stop_cache, policy)
+    result = dict(mode=mode, policy=policy, targets=int((weights>0).sum()), fit_support=fit_support,
+                  stop_support=stop_support, history=[], selected_epoch=0)
+    if not len(y) or not len(stop_y):
+        return dict(result, status="skipped_no_fit_targets" if not len(y) else "skipped_no_stop_targets")
     model=ShallowReview(c["h"].size(-1),mode)
-    opt=torch.optim.AdamW(model.parameters(),lr=.001,weight_decay=0)
-    supervised=0
-    for epoch in range(10):
-        for ix in torch.randperm(len(c["z"])).split(256):
-            z,active=model(*(v[ix] for v in inputs))
-            known=active & c["known"][ix]
-            if not known.any(): continue
-            weights=c["weights"][ix,None].expand_as(z)[known]
-            loss=F.binary_cross_entropy_with_logits(z[known],c["y"][ix][known].float(),reduction="none")
-            opt.zero_grad(); (loss*weights).sum().div(weights.sum()).backward();opt.step()
-            if epoch==0:supervised+=int(known.sum())
-    if not supervised:raise ValueError("No eligible supervised review targets")
-    return dict(mode=mode,state=model.state_dict(),targets=supervised,policy=policy)
+    schedule = TrainingConfig(epochs=10, lr_schedule="cosine", lr_warmup_epochs=1, lr_min=1e-5)
+    opt = torch.optim.AdamW(model.parameters(), lr=schedule.learning_rate, weight_decay=0)
+    t = policy["temperature"]
+    best_loss = review_bce(stop_inputs[1], stop_y, stop_weights, t).item()
+    result["initial_stop_bce"] = best_loss
+    best_state = deepcopy(model.state_dict())
+    for epoch in range(1, schedule.epochs + 1):
+        batches = torch.randperm(len(y)).split(256)
+        for step, ix in enumerate(batches):
+            lr = scheduled_learning_rate(schedule, epoch - 1 + step / len(batches))
+            opt.param_groups[0]["lr"] = lr
+            z, _ = model(*(v[ix] for v in inputs))
+            loss = review_bce(z, y[ix], weights[ix], t)
+            if not torch.isfinite(loss):
+                raise ValueError("Non-finite review training loss")
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+        with torch.no_grad():
+            valid_z, _ = model(*stop_inputs)
+            score = review_bce(valid_z, stop_y, stop_weights, t).item()
+        if not np.isfinite(score):
+            raise ValueError("Non-finite review validation loss")
+        result["history"].append(dict(epoch=epoch, stop_bce=score, lr_last=lr))
+        if score < best_loss:
+            best_loss, best_state = score, deepcopy(model.state_dict())
+            result["selected_epoch"] = epoch
+        if epoch - result["selected_epoch"] >= 3:
+            break
+    return dict(result, status="fitted", state=best_state, epochs_run=epoch,
+                stop_reason="patience" if epoch < schedule.epochs else "max_epochs")
 
 
 def shuffled_source(c, inputs):
@@ -185,8 +250,9 @@ def evaluate(c,policy,head,mode,out,shuffle=False):
     eligible = v & initial.eq(-1) & donors.any(-1)
     active=torch.zeros_like(v)
     updated=z
-    if head:
-        if mode!="cost" or head["policy"]!=policy: raise ValueError("Residual requires its original policy")
+    if head and (mode!="cost" or head["policy"]!=policy):
+        raise ValueError("Residual requires its original policy")
+    if head and head.get("status","fitted") == "fitted":
         model=ShallowReview(c["h"].size(-1),head["mode"])
         model.load_state_dict(head["state"])
         inputs=review_inputs(c,policy)
@@ -203,6 +269,9 @@ def evaluate(c,policy,head,mode,out,shuffle=False):
     with out.open("x",encoding="utf-8") as f:
         for i,k in enumerate(v.sum(1).tolist()):
             row=dict(sample_id=c["sample_ids"][i],board=c["boards"][i],weight=float(c["weights"][i]),
+                     checkpoint=c["checkpoint"], budget=policy["budget"], mode=mode,
+                     point_fee=policy["knobs"]["cost"], shuffled=shuffle,
+                     review_head=head["mode"] if head else None, review_status=head.get("status","fitted") if head else "no_head",
                      logits=z[i,:k].tolist(),final_logits=updated[i,:k].tolist(),temperature=policy["temperature"],
                      truth=c["y"][i,:k].tolist(),known=c["known"][i,:k].tolist(),initial=initial[i,:k].tolist(),
                      calibration_guard_met=policy["operating_points"].get(mode,{}).get("guard_met"),
@@ -215,14 +284,16 @@ def main():
     sub=parser.add_subparsers(dest="op",required=True)
     cache=sub.add_parser("cache")
     cache.add_argument("config",type=Path); cache.add_argument("run",type=Path)
-    cache.add_argument("role",choices=("residual_fit","calibration_workpoint","dev_evaluation"))
+    cache.add_argument("role",choices=("early_stop","residual_fit","calibration_workpoint","dev_evaluation"))
     cache.add_argument("--device",default="cuda")
     for op in ("calibrate","fit-review","evaluate"):
         subp=sub.add_parser(op)
         subp.add_argument("cache",type=Path)
         if op=="calibrate":subp.add_argument("--budget",type=float,default=.1)
         else:subp.add_argument("policy",type=Path)
-        if op=="fit-review":subp.add_argument("mode",choices=("self","scores","features"))
+        if op=="fit-review":
+            subp.add_argument("mode",choices=("self","scores","features"))
+            subp.add_argument("--early-stop", type=Path, required=True)
         if op=="evaluate":
             subp.add_argument("--mode",choices=("map","whole","layer","additive","cost"),default="cost")
             subp.add_argument("--head",type=Path)
@@ -239,7 +310,9 @@ def main():
         else:
             policy=read(a.policy)
             if policy["checkpoint"]!=c["checkpoint"]:raise ValueError("Checkpoint mismatch")
-            if a.op=="fit-review":result=fit_review(c,policy,a.mode)
+            if a.op=="fit-review":
+                stop_cache=torch.load(a.early_stop,map_location="cpu",weights_only=True)
+                result=fit_review(c,policy,a.mode,stop_cache)
             else:
                 head=torch.load(a.head,map_location="cpu",weights_only=True) if a.head else None
                 evaluate(c,policy,head,a.mode,a.output,a.shuffle)

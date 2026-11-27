@@ -12,6 +12,7 @@ from a3_ultrasound.models.losses import head_training_loss
 from a3_ultrasound.prefix_perturbation import training_conditional
 from a3_ultrasound.stream_metrics import PredictionAccumulator
 from a3_ultrasound.selection import GuardedSelector
+from a3_ultrasound.recovery_diagnostics import BoardLayerDiagnostics,write_recovery_checkpoint
 from a3_ultrasound.data.epoch_sampling import use_epoch
 from a3_ultrasound.validation_diagnostics import CorrectionArchive
 from a3_ultrasound.freeze_protocol import PROTOCOL as FREEZE_PROTOCOL,validate_freeze_config,verify_panels,commit_identity
@@ -37,10 +38,11 @@ def catalog_signature(catalog):
     return hashlib.sha256(json.dumps(data,sort_keys=True,ensure_ascii=False).encode('utf-8')).hexdigest()
 
 
-def evaluate_stream(model,data,*,batch_size,device,prediction_path=None,progress_path=None,phase='evaluation',epoch=None,correction_archive=None,speed_options=None):
+def evaluate_stream(model,data,*,batch_size,device,prediction_path=None,progress_path=None,phase='evaluation',epoch=None,correction_archive=None,speed_options=None,layer_diagnostic_board=None):
     primary=PredictionAccumulator();nominal=PredictionAccumulator();quality=PredictionAccumulator()
     per_specimen=defaultdict(PredictionAccumulator);per_material=defaultdict(PredictionAccumulator)
     materials={s['entity']:('AL' if s['group']=='AL' else 'TC4') for s in data.shards}
+    layer_diagnostics=BoardLayerDiagnostics(layer_diagnostic_board) if layer_diagnostic_board else None
     handle=prediction_path.open('w',encoding='utf-8') if prediction_path else None
     try:
         seen=0
@@ -53,6 +55,7 @@ def evaluate_stream(model,data,*,batch_size,device,prediction_path=None,progress
                 per_specimen[row['specimen_id']].add(row)
                 per_material[materials[row['specimen_id']]].add(row)
                 if correction_archive is not None:correction_archive.add(row)
+                if layer_diagnostics is not None:layer_diagnostics.add(row)
                 nominal.add(dict(row,y=row['nominal_y'],label_mask=row['nominal_label_mask']))
                 if row['quality_flagged']:quality.add(row)
                 if handle:handle.write(json.dumps(row,ensure_ascii=False,allow_nan=False)+'\n')
@@ -61,9 +64,12 @@ def evaluate_stream(model,data,*,batch_size,device,prediction_path=None,progress
                 progress(progress_path,phase=phase,epoch=epoch,records=seen,total_records=len(data))
     finally:
         if handle:handle.close()
-    return {'reliable':primary.result(),'nominal_secondary':nominal.result(),'quality_flagged':quality.result(),
+    result={'reliable':primary.result(),'nominal_secondary':nominal.result(),'quality_flagged':quality.result(),
             'per_specimen':{k:v.result() for k,v in per_specimen.items()},
             'per_material':{k:v.result() for k,v in per_material.items()}}
+    if layer_diagnostics is not None:
+        result['board_layer_diagnostics']=layer_diagnostics.result()
+    return result
 
 
 def validate_fold(fold,catalog):
@@ -122,9 +128,19 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
     tvals=dict(cfg['training'],seed=seed)
     if diagnostic:tvals.update(cfg['diagnostic']['training'])
     tc=TrainingConfig(**tvals);_validate_training_config(tc)
+    recovery_board=cfg.get('recovery_diagnostic_board')
+    if recovery_board is not None and (
+        diagnostic or development or recovery_board not in fold['validation'] or head!='local_independent'
+        or tc.selection_rule!='guarded_joint' or tc.min_epochs<15 or tc.epochs<15 or tc.lr_schedule is None
+        or cfg.get('save_epoch_checkpoints',False)
+    ):
+        raise ValueError('Recovery observations require registered validation, independent logits and guarded early stopping.')
     evaluation_batch_size=cfg.get('evaluation_batch_size',tc.batch_size)
     if type(evaluation_batch_size) is not int or evaluation_batch_size<1:
         raise ValueError('evaluation_batch_size must be a positive integer.')
+    final_batch_size=cfg.get('final_evaluation_batch_size',evaluation_batch_size) if recovery_board else evaluation_batch_size
+    if type(final_batch_size) is not int or final_batch_size<1:
+        raise ValueError('final_evaluation_batch_size must be a positive integer.')
     if tc.device=='cuda' and not torch.cuda.is_available():raise RuntimeError('CUDA unavailable; no silent fallback.')
     model_config=ModelConfig(**dict(cfg['model'],head_type=head))
     physical, m6 = load_physical_artifacts(cfg) if v15 else (None,None)
@@ -203,6 +219,7 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
     history=[];best=(-float('inf'),-float('inf'));stale=0;updates=0;alarm_reasons=[]
     generator=torch.Generator().manual_seed(seed)
     selector=GuardedSelector(tc.min_epochs,tc.patience,tc.min_delta,tc.normal_fpr_limit) if tc.selection_rule=='guarded_joint' else None
+    progress_anchor_epoch=None
     if selector and diagnostic:raise ValueError('Guarded selection requires fixed held-out validation.')
     try:
         before=evaluate_stream(model,training,batch_size=tc.batch_size,device=tc.device) if diagnostic else None
@@ -257,17 +274,27 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
                 correction_archive=CorrectionArchive() if head in ('proposed','proposed_v15') and cfg.get('save_best_correction_npz') else None
                 progress(output/'progress.json',phase='validation',epoch=epoch,records=0,total_records=len(validation))
                 metrics=evaluate_stream(model,validation,batch_size=evaluation_batch_size,device=tc.device,
-                    progress_path=output/'progress.json',phase='validation',epoch=epoch,correction_archive=correction_archive,speed_options=speed)
+                    progress_path=output/'progress.json',phase='validation',epoch=epoch,correction_archive=correction_archive,
+                    speed_options=speed,layer_diagnostic_board=recovery_board)
                 score=metrics['reliable'];key=(score['deepest_specimen_macro_f1'],-score['joint_nll'] if score['joint_nll'] is not None else -float('inf'))
                 if key[0] is None:raise RuntimeError('Validation has no reliable deepest labels.')
                 record['validation']=metrics
-                if selector:record['selection']=selector.update(epoch,score)
+                if selector:
+                    anchor=selector.progress_anchor
+                    record['selection']=selector.update(epoch,score)
+                    if recovery_board:
+                        if selector.progress_anchor!=anchor:
+                            progress_anchor_epoch=epoch
+                        record['selection'].update(progress_anchor_epoch=progress_anchor_epoch,progress_anchor=selector.progress_anchor)
             else:key=(float(epoch),0.)
             record['epoch_selection_sha256']=epoch_sha
             if selector:
                 payload={'model_state_dict':model.state_dict(),'optimizer_state_dict':optimizer.state_dict(),
                     'resolved_config':resolved,'epoch':epoch,'selection_state':selector.state_dict(),
                     'diagnostic_weights_never_reuse':diagnostic}
+                if recovery_board:
+                    payload.update(updates_total=updates,lr_epoch_start=record['lr_epoch_start'],lr_last=record['lr_last'],
+                                   config_sha256=config_sha256)
                 if record['selection']['guarded_updated']:torch.save(payload,output/'best_guarded.pt')
                 if record['selection']['fallback_updated']:torch.save(payload,output/'best_fallback.pt')
                 if correction_archive is not None:
@@ -292,6 +319,8 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
                     'numpy_rng_state':{'generator':np_state[0],'keys':np_state[1].tolist(),
                         'position':np_state[2],'has_gauss':np_state[3],'cached_gaussian':np_state[4]}},
                     output/f'epoch_{epoch:02d}.pt')
+            if recovery_board and epoch==15:
+                write_recovery_checkpoint(output,'epoch_15.pt',model,record,config_sha256)
             print(json.dumps({'fold':fold_name,'head':head,**{k:v for k,v in record.items() if k!='validation'}},ensure_ascii=True),flush=True)
             if development:
                 alarm_reasons=stage2_alarms(epoch,score)
@@ -301,12 +330,33 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
             if selector:
                 if record['selection']['stop']:break
             elif not diagnostic and stale>=tc.patience:break
-        selected_name=('best_guarded.pt' if selector.guarded else 'best_fallback.pt') if selector else 'best.pt'
-        checkpoint=torch.load(output/selected_name,map_location=tc.device,weights_only=True);model.load_state_dict(checkpoint['model_state_dict'])
         target=training if diagnostic else validation
-        final=evaluate_stream(model,target,batch_size=evaluation_batch_size,device=tc.device,prediction_path=output/'predictions.jsonl',
-            progress_path=output/'progress.json',phase='final_validation',epoch=checkpoint['epoch'],speed_options=speed)
-        result={'status':'COMPLETED','diagnostic':diagnostic,'updates':updates,'epochs':len(history),'best_epoch':checkpoint['epoch'],
+        selected_name=('best_guarded.pt' if selector.guarded else 'best_fallback.pt') if selector else 'best.pt'
+        checkpoints={}
+        if recovery_board:
+            write_recovery_checkpoint(output,'last_epoch.pt',model,history[-1],config_sha256)
+            for key,filename,observation in (('fixed_epoch15','epoch_15.pt',history[14]),('last_epoch','last_epoch.pt',history[-1])):
+                saved=torch.load(output/filename,map_location=tc.device,weights_only=True)
+                model.load_state_dict(saved['model_state_dict'])
+                report=evaluate_stream(model,target,batch_size=final_batch_size,device=tc.device,
+                    prediction_path=output/f'predictions_{key}.jsonl',progress_path=output/'progress.json',
+                    phase=f'validation_{key}',epoch=saved['epoch'],speed_options=speed,layer_diagnostic_board=recovery_board)
+                checkpoints[key]=dict(filename=filename,epoch=saved['epoch'],updates_total=saved['updates_total'],
+                    lr_epoch_start=saved['lr_epoch_start'],lr_last=saved['lr_last'],metrics=report,
+                    guard_met=observation['validation']['reliable']['normal_joint_false_positive_rate']<=tc.normal_fpr_limit)
+            if selector.guarded is None:
+                selected_name=None
+        best_epoch=None
+        final=None
+        if selected_name is not None:
+            checkpoint=torch.load(output/selected_name,map_location=tc.device,weights_only=True)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            best_epoch=checkpoint['epoch']
+            final=evaluate_stream(model,target,batch_size=final_batch_size,device=tc.device,
+                prediction_path=output/'predictions.jsonl',progress_path=output/'progress.json',phase='final_validation',
+                epoch=best_epoch,speed_options=speed,layer_diagnostic_board=recovery_board)
+        result={'status':'COMPLETED' if selected_name else 'NO_ADMISSIBLE_CHECKPOINT',
+            'diagnostic':diagnostic,'updates':updates,'epochs':len(history),'best_epoch':best_epoch,
             'seconds':time.perf_counter()-started,'selection_counts':training.selection_summary(),'metrics':final,
             'test_opened':False,'performance_claims_released':False,'old_weights_reused':False}
         result.update(selected_checkpoint=selected_name,guard_violated=selector.guarded is None if selector else None,
@@ -320,6 +370,8 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
         if development:
             result.update(status='SCREENED_OUT' if alarm_reasons else 'COMPLETED_DEVELOPMENT_DIAGNOSTIC',
                           formal_result=False,screening_reasons=alarm_reasons,development_stage=2)
+        if recovery_board:
+            result.update(recovery_checkpoints=checkpoints,progress_anchor_epoch=progress_anchor_epoch)
         save(output/'summary.json',result)
         progress(output/'progress.json',phase='completed',epochs=len(history),updates_total=updates)
         return result

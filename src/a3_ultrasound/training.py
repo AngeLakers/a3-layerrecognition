@@ -133,8 +133,10 @@ def build_model(config: ModelConfig, *, v171: bool = False) -> A3Model:
         raise ValueError("Unknown head_type.")
     if config.rho not in (1.0, 2.0, 3.0):
         raise ValueError("rho must use the registered candidates 1, 2, 3.")
-    if config.common_feature_dim != 64:
-        raise ValueError("The common V1.3 adapter output must be D_h=64.")
+    wide_readout = config.relative_time_attention and config.readout_scope == "full_waveform"
+    allowed_feature_dims = (64, 128) if wide_readout else (64,)
+    if config.common_feature_dim not in allowed_feature_dims:
+        raise ValueError(f"The common adapter width must be one of {allowed_feature_dims}.")
     if config.backbone == "patchtst":
         if not v18 or config.backbone_stage != "final_pre_pool":
             raise ValueError("PatchTST requires v1.8 pre-head temporal tokens.")

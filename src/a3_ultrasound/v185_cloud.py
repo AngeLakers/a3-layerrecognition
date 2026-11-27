@@ -31,7 +31,16 @@ def write(path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
 
 
-def class_weights(dataset):
+def check_base_schedule(cfg):
+    required = dict(selection_rule="guarded_joint", epochs=40, min_epochs=15, patience=10,
+                    normal_fpr_limit=.02, lr_schedule="cosine", lr_warmup_epochs=2,
+                    learning_rate=.001, lr_min=.00001, scheduler_step_size=None, min_delta=.002)
+    for field, expected in required.items():
+        if cfg["training"].get(field) != expected:
+            raise ValueError(f"v1.8.5 base training requires {field}={expected}")
+
+
+def class_support(dataset):
     width = max(shard["K"] for shard in dataset.shards)
     pos = np.zeros(width, dtype=np.int64)
     counts = np.zeros_like(pos)
@@ -43,15 +52,23 @@ def class_weights(dataset):
             raise ValueError("Incomplete labels in training cohort")
         pos[:k] += y.sum(0, dtype=np.int64)
         counts[:k] += len(ids)
-    if np.any((pos == 0) | (pos == counts)):
-        raise ValueError("Weighted arm lacks a positive or negative training label")
-    return ((counts - pos) / pos).tolist()
+    negative = counts - pos
+    supported = bool(np.all((pos > 0) & (negative > 0)))
+    return dict(positive=pos.tolist(), negative=negative.tolist(),
+                weights=(negative / pos).tolist() if supported else None,
+                status="ready" if supported else "skipped_missing_class")
 
 
 def prepare(template, roles_csv, target):
     cfg = read(template)
     if cfg.get("protocol") != "A3-v1.8-M1-paired-v1" or cfg["m1_arm"] != "G":
         raise ValueError("Expected a frozen M1 G template")
+    check_base_schedule(cfg)
+    model = cfg["model"]
+    if model.get("relative_time_attention") is not True or model.get("readout_scope") != "full_waveform":
+        raise ValueError("Expected a full-waveform relative-time readout in the M1 G template")
+    if (model.get("query_dim"), model.get("attention_dim")) != (64, 64):
+        raise ValueError("Expected 64-dimensional query and attention in the M1 G template")
     # Each M1 template contains the same five splits. Its m1_fold selects the run.
     fold = cfg["m1_fold"]
     original, = [entry for entry in cfg["folds"] if entry["fold"] == fold]
@@ -72,6 +89,7 @@ def prepare(template, roles_csv, target):
     target.parent.mkdir(parents=True, exist_ok=True)
     cfg.update(protocol="A3-v1.8.5", execution_version="v1.8.5", folds=[splits], roles=roles,
                outer_evaluation_permitted=False, epoch_selection_root=None, validation_selection_root=None)
+    model.update(common_feature_dim=128, token_dim=128)
     if cfg["catalog_signature"] != catalog_signature(read(cfg["catalog"])):
         raise ValueError("Catalog signature mismatch")
     for path_key, sha_key in (("timebase_calibration_path","timebase_calibration_sha256"),
@@ -82,7 +100,8 @@ def prepare(template, roles_csv, target):
         work = Path(temp) / "prepared"
         work.mkdir()
         data = dataset_from_config(cfg, "train")
-        weights = class_weights(data)
+        support = class_support(data)
+        write(work/"weighted_support.json", support)
         freeze_epochs(data, work/"epochs", seed=23, epochs=cfg["training"]["epochs"],
                       catalog_signature=cfg["catalog_signature"])
         for role in ("early_stop", "residual_fit", "calibration_workpoint", "dev_evaluation"):
@@ -103,8 +122,10 @@ def prepare(template, roles_csv, target):
         cfg["validation_sha256"] = read(work/"early_stop/manifest.json")["folds"][fold]["sha256"]
         for backbone in BACKBONES:
             for arm in loss_arms(backbone):
+                if arm == "weighted" and support["weights"] is None:
+                    continue
                 cell = dict(cfg, model=dict(cfg["model"],backbone=backbone),
-                            training=dict(cfg["training"],v185_loss=arm,layer_weights=weights if arm=="weighted" else None))
+                            training=dict(cfg["training"],v185_loss=arm,layer_weights=support["weights"] if arm=="weighted" else None))
                 write(work/f"{backbone}_{arm}.json",cell)
         work.rename(target)
 
@@ -132,6 +153,7 @@ def main():
         cfg=read(args.config)
         if cfg.get("protocol")!="A3-v1.8.5" or cfg.get("outer_evaluation_permitted") is not False:
             raise ValueError("Expected a prepared v1.8.5 development config")
+        check_base_schedule(cfg)
         # The historical M1 launcher supplied this before the deterministic CUDA runner.
         os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
         train(args.config,args.output,fold_name=cfg["folds"][0]["fold"],head="local_independent",seed=23)
