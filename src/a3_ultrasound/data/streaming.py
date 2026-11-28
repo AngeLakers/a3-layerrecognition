@@ -20,11 +20,11 @@ class RFShardDataset:
     def __init__(self, catalog_path, entities, *, training=False, seed=23,
                  normal_ratio=3, diagnostic_per_class=None, physical_config=None,
                  tail_policy=None, window_policy=None, timebase_config=None, window_jitter=None,
-                 m3_config=None, row_view=None):
+                 m3_config=None, row_view=None, use_board_interval=False):
         self._spawn_kwargs=dict(catalog_path=catalog_path,entities=list(entities),training=training,seed=seed,
             normal_ratio=normal_ratio,diagnostic_per_class=diagnostic_per_class,physical_config=physical_config,
             tail_policy=tail_policy,window_policy=window_policy,timebase_config=timebase_config,window_jitter=window_jitter,
-            m3_config=m3_config, row_view=row_view)
+            m3_config=m3_config, row_view=row_view, use_board_interval=use_board_interval)
         self.speed_options=SpeedOptions();self._record_cache={}
         self.path=Path(catalog_path)
         self.catalog=json.loads(self.path.read_text(encoding='utf-8'))
@@ -46,6 +46,7 @@ class RFShardDataset:
         if window_jitter is not None and (timebase_config is None or window_jitter !=
                 {'enabled':True,'max_shift_samples':24,'seed':23,'distribution':'uniform'}):
             raise ValueError('Unknown training window jitter strategy.')
+        self.use_board_interval = use_board_interval
         self.window_jitter=window_jitter
         self.jitter_epoch=0
         self.physical_config=physical_config
@@ -127,6 +128,15 @@ class RFShardDataset:
                 raise ValueError('Evaluation uses natural proportions; no diagnostic sampling.')
             if not len(ids):raise ValueError(f'No records selected for {entity}.')
             shard=dict(entry,arrays=arrays,rf=np.load(self.path.parent / entry['rf_path'],mmap_mode='r'))
+            if self.use_board_interval:
+                if entity not in self.timebase_rows:
+                    raise ValueError(f"Missing frozen calibration for {entity}.")
+                tau = np.asarray(self.timebase_rows[entity]['selected_tau'], dtype=np.float64)
+                gaps = np.diff(tau)
+                if (entry['K'] not in (2, 3) or tau.shape != (entry['K'],)
+                        or not np.isfinite(tau).all() or not (gaps > 0).all()):
+                    raise ValueError(f"Invalid frozen interface times for {entity}.")
+                shard['board_interval_samples'] = np.median(gaps)
             if training and exclusion is not None:
                 shard['sampling_eligible'] = allowed_rows
             ordinal=len(self.shards);self.shards.append(shard)
@@ -220,6 +230,10 @@ class RFShardDataset:
         values={'x_raw':padded,'length_mask':np.arange(padded.shape[-1])[None]<lengths[:,None],
                 'interface_meta':np.stack(metas),'interface_mask':np.stack(masks),
                 'label_mask':np.stack(label_masks),'y':np.stack(ys)}
+        if self.use_board_interval:
+            shard_ids = self.refs[np.asarray(indices), 0]
+            values['board_interval_samples'] = np.asarray(
+                [self.shards[s]['board_interval_samples'] for s in shard_ids], dtype=np.float32)
         if self.physical_config is not None:
             values.update(phys_loc=np.stack(physical_loc),phys_ctx=np.stack(physical_ctx))
         if self.speed_options.cpu_structure or self.speed_options.pin_memory or self.speed_options.non_blocking:

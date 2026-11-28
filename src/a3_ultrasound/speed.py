@@ -163,7 +163,7 @@ def dataset_from_config(cfg,split, *, sampled_validation=True):
         normal_ratio=cfg['normal_to_positive'],diagnostic_per_class=cfg.get('diagnostic',{}).get('per_entity_per_class') if split=='diagnostic' else None,
         physical_config=physical,tail_policy=cfg.get('input_tail_policy'),window_policy=cfg.get('input_window_policy'),
         timebase_config=table,window_jitter=cfg.get('window_jitter') if training else None,m3_config=m3,
-        row_view=row_view)
+        row_view=row_view, use_board_interval=cfg.get("model", {}).get("relative_time_scale") == "board_interval")
     data.speed_options=SpeedOptions(**cfg.get('speed',{}))
     if split=='validation' and sampled_validation and cfg.get('validation_selection_root'):
         from a3_ultrasound.stream_training import catalog_signature

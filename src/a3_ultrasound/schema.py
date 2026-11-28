@@ -45,11 +45,18 @@ class InterfaceBatch:
     y: Tensor | None = None
     phys_loc: Tensor | None = None
     phys_ctx: Tensor | None = None
+    board_interval_samples: Tensor | None = None
 
     def __post_init__(self) -> None:
         if self.x_raw.ndim not in (2, 3):
             raise ValueError("x_raw must have shape [B, T] or [B, C, T].")
         batch_size, trace_length = self.x_raw.shape[0], self.x_raw.shape[-1]
+        interval = self.board_interval_samples
+        if interval is not None and (
+            interval.shape != (batch_size,) or interval.dtype != torch.float32
+            or not torch.isfinite(interval).all() or not (interval > 0).all()
+        ):
+            raise ValueError("Board intervals must be finite positive float32 samples, one per trace.")
         if self.x_raw.ndim == 3 and self.x_raw.shape[1] not in (1, 2):
             raise ValueError("Expected one or two RF channels.")
         if self.x_raw.dtype != torch.float32:

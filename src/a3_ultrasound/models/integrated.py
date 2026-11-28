@@ -97,6 +97,7 @@ class A3PCCModel(nn.Module):
         pre_exclude_front_end: int | None = None,
         reference_bias: str = "none",
         stage1_donor: str = "none",
+        relative_time_scale: str = "fixed80",
     ) -> None:
         super().__init__()
         if any(
@@ -134,6 +135,13 @@ class A3PCCModel(nn.Module):
             raise ValueError("Invalid reference bias")
         if reference_bias != "none" and not (relative_time_attention and readout_scope == "full_waveform"):
             raise ValueError("Reference bias requires global time-aware readout")
+        if relative_time_scale not in ("fixed80", "board_interval"):
+            raise ValueError("Unknown relative time scale.")
+        if relative_time_scale == "board_interval" and not (
+            relative_time_attention and readout_scope == "full_waveform" and reference_bias == "none"
+        ):
+            raise ValueError("Board intervals require unbiased full-waveform relative time attention.")
+        self.relative_time_scale = relative_time_scale
         self.reference_bias = reference_bias
         self.readout_scope = readout_scope
         self.pre_query_conditioned = pre_query_conditioned
@@ -252,7 +260,13 @@ class A3PCCModel(nn.Module):
             centers = backbone_output.feature_centers
             if centers.ndim == 1:
                 centers = centers.unsqueeze(0)
-            relative_time = (centers.float().unsqueeze(1) - nominal_tof.float().unsqueeze(-1)) / 80.0
+            distance = centers.float().unsqueeze(1) - nominal_tof.float().unsqueeze(-1)
+            if self.relative_time_scale == "board_interval":
+                if batch.board_interval_samples is None:
+                    raise ValueError("Missing frozen board interval in samples.")
+                relative_time = distance / batch.board_interval_samples[:, None, None]
+            else:
+                relative_time = distance / 80.0
         score_bonus = None
         if self.reference_bias != "none":
             left, right = {"symmetric": (40., 40.), "late": (32., 48.), "early": (48., 32.)}[self.reference_bias]

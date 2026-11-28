@@ -60,6 +60,7 @@ class ModelConfig:
     reference_bias: str = "none"
     input_channels: int = 1
     stage1_donor: str = "none"
+    relative_time_scale: str = "fixed80"
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,8 @@ def build_model(config: ModelConfig, *, v171: bool = False) -> A3Model:
     if config.head_type in ("state_conditioned_gru", "waveform_only_gru") and not v18:
         raise ValueError("The state-conditioned GRU requires a3-v1.8.")
     v18_heads = ("local_pre_independent", "state_conditioned_gru", "waveform_only_gru")
+    if config.relative_time_scale != "fixed80" and not config.relative_time_attention:
+        raise ValueError("Board-scaled coordinates require relative time attention.")
     if config.relative_time_attention:
         if not v18 or config.backbone not in ("resnet1d", "patchtst", "tcn", "inceptiontime") or config.head_type != "local_independent":
             raise ValueError("M1 relative time requires a registered v1.8 temporal encoder and independent head.")
