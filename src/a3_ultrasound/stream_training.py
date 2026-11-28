@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from a3_ultrasound.data.streaming import RFShardDataset
 from a3_ultrasound.training import ModelConfig,TrainingConfig,TensorDataset,build_model,build_optimizer,evaluate,_validate_training_config,_code_version,scheduled_learning_rate
-from a3_ultrasound.models.losses import head_training_loss
+from a3_ultrasound.models.losses import head_training_loss, R1_WEIGHTED_LOSSES
 from a3_ultrasound.prefix_perturbation import training_conditional
 from a3_ultrasound.stream_metrics import PredictionAccumulator
 from a3_ultrasound.selection import GuardedSelector
@@ -83,6 +83,12 @@ def validate_fold(fold,catalog):
 def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorization=None):
     from a3_ultrasound.v171_protocol import load_config
     cfg=load_config(config_path)
+    frozen_source = cfg.get('r1_frozen_encoder')
+    if frozen_source is not None:
+        from a3_ultrasound.v186_r1 import DEVELOPMENT_PROTOCOL
+        if (cfg.get('protocol') != DEVELOPMENT_PROTOCOL
+                or cfg.get('model', {}).get('architecture_version') != 'a3-v1.8'):
+            raise ValueError('R1 frozen encoders require the v1.8.6 no-thin development protocol.')
     if cfg.get('protocol') == 'A3-v1.8.6-stage1' or cfg.get('model', {}).get('stage1_donor', 'none') != 'none':
         from a3_ultrasound.v186 import validate_configuration, verify_inputs
         if diagnostic or head != 'local_independent' or seed != 23:
@@ -134,6 +140,13 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
     tvals=dict(cfg['training'],seed=seed)
     if diagnostic:tvals.update(cfg['diagnostic']['training'])
     tc=TrainingConfig(**tvals);_validate_training_config(tc)
+    if tc.v185_loss in R1_WEIGHTED_LOSSES and frozen_source is None:
+        raise ValueError('R1 weighted loss requires a frozen encoder source.')
+    if frozen_source is not None and (
+        diagnostic or head != 'local_independent' or cfg.get('outer_evaluation_permitted')
+        or tc.outer_evaluation_permitted or cfg['model'].get('stage1_donor', 'none') != 'none'
+    ):
+        raise ValueError('Frozen encoder runs use the development-only independent head.')
     recovery_board=cfg.get('recovery_diagnostic_board')
     if recovery_board is not None and (
         diagnostic or development or recovery_board not in fold['validation'] or head!='local_independent'
@@ -178,6 +191,10 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
         use_epoch(training,cfg['epoch_selection_root'],1,seed=seed,catalog_signature=catalog_signature(catalog))
         if frozen and len(training)!=100732:raise ValueError('Frozen F1 must use all positives and 100,732 training rows per epoch.')
     model = (build_model(model_config, v171=True) if v171 else build_model(model_config)).to(tc.device)
+    frozen_modules = ()
+    if frozen_source is not None:
+        from a3_ultrasound.v186_r1 import load_frozen_encoder
+        frozen_modules = load_frozen_encoder(model, frozen_source, fold, model_config)
     configure_model(model, speed)
     loss_head = 'local_independent' if v171 and head == 'g1d' else head
     optimizer,counts=build_optimizer(model,tc,fused=speed.fused_adam)
@@ -221,6 +238,8 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
                     protocol=cfg.get('protocol'),automatic_screening=False if frozen else development,old_weights_reused=False)
     if development:
         resolved['budget_exception']='Stage2 max10 is shorter than min15; no selector early stop, only exploratory alarms. Not convergence evidence.'
+    if frozen_source is not None:
+        resolved.update(r1_frozen_encoder=frozen_source, old_weights_reused=True)
     save(output/'resolved_config.json',resolved)
     history=[];best=(-float('inf'),-float('inf'));stale=0;updates=0;alarm_reasons=[]
     generator=torch.Generator().manual_seed(seed)
@@ -235,6 +254,9 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
             if cfg.get('epoch_selection_root'):
                 epoch_sha=use_epoch(training,cfg['epoch_selection_root'],epoch,seed=seed,catalog_signature=catalog_signature(catalog))
             model.train();total=0.;seen=0;deferred_losses=[]
+            for module in frozen_modules:
+                module.eval()
+            weight_summary = None
             perturbation=dict(attempted=0,changed=0,eligible=0)
             perturbation_hash=hashlib.sha256()
             progress(output/'progress.json',phase='training',epoch=epoch,records=0,total_records=len(training),updates_total=updates)
@@ -260,6 +282,9 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
                         if not torch.isfinite(loss.total):raise RuntimeError('Nonfinite loss.')
                         loss.total.backward()
                         if any(p.grad is not None and not torch.isfinite(p.grad).all() for p in model.parameters()):raise RuntimeError('Nonfinite gradient.')
+                if loss.weight_summary is not None:
+                    weight_summary = (loss.weight_summary if weight_summary is None
+                                      else weight_summary + loss.weight_summary)
                 for name in perturbation:perturbation[name]+=attempt[name]
                 if attempt['attempt_mask_sha256']:perturbation_hash.update(attempt['attempt_mask_sha256'].encode('ascii'))
                 optimizer.step()
@@ -293,6 +318,12 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
                             progress_anchor_epoch=epoch
                         record['selection'].update(progress_anchor_epoch=progress_anchor_epoch,progress_anchor=selector.progress_anchor)
             else:key=(float(epoch),0.)
+            if weight_summary is not None:
+                total_weight, valid, changed, weight_sum = weight_summary.tolist()
+                record['r1_supervision'] = {
+                    'point_weight_sum': total_weight, 'valid_interfaces': int(valid),
+                    'adjusted_interfaces': int(changed), 'interface_weight_sum': weight_sum,
+                }
             record['epoch_selection_sha256']=epoch_sha
             if selector:
                 payload={'model_state_dict':model.state_dict(),'optimizer_state_dict':optimizer.state_dict(),
@@ -364,7 +395,9 @@ def train(config_path,output,*,fold_name,head,seed,diagnostic=False,authorizatio
         result={'status':'COMPLETED' if selected_name else 'NO_ADMISSIBLE_CHECKPOINT',
             'diagnostic':diagnostic,'updates':updates,'epochs':len(history),'best_epoch':best_epoch,
             'seconds':time.perf_counter()-started,'selection_counts':training.selection_summary(),'metrics':final,
-            'test_opened':False,'performance_claims_released':False,'old_weights_reused':False}
+            'test_opened':False,'performance_claims_released':False,'old_weights_reused':resolved['old_weights_reused']}
+        if frozen_source is not None:
+            result['r1_frozen_encoder'] = frozen_source
         result.update(selected_checkpoint=selected_name,guard_violated=selector.guarded is None if selector else None,
                       result_role='diagnostic_fallback_only' if selector and selector.guarded is None else 'guarded_or_legacy')
         result.update(commit_hash=code_version.get('commit'),config_sha256=config_sha256,code_version=code_version,
@@ -404,6 +437,8 @@ def test_checkpoint(config_path,checkpoint_path,output):
     if cfg.get('protocol') in (FREEZE_PROTOCOL,V15_PROTOCOL,'A3-v1.8.6-stage1') or cfg.get('model',{}).get('architecture_version')=='a3-v1.6':raise ValueError('Outer evaluation is closed for frozen development runs.')
     if not cfg.get('outer_evaluation_permitted',False):raise ValueError('Outer evaluation remains closed.')
     c=torch.load(checkpoint_path,map_location=cfg['training']['device'],weights_only=True);resolved=c['resolved_config']
+    if resolved.get('r1_frozen_encoder') is not None:
+        raise ValueError('Outer evaluation is closed for an R1 development checkpoint.')
     if resolved.get('development_stage') is not None:
         raise ValueError('Development diagnostic checkpoint cannot enter outer evaluation.')
     if c.get('selection_state') is not None and c['selection_state']['guarded'] is None:

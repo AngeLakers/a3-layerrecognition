@@ -24,7 +24,7 @@ from torch import Tensor
 
 from a3_ultrasound.models.backbone import LengthGroupedTCNBackbone, TsaiTimePreservingBackbone
 from a3_ultrasound.models.integrated import A3Model, HEAD_TYPES
-from a3_ultrasound.models.losses import head_training_loss, validate_complete_training_batch
+from a3_ultrasound.models.losses import R1_WEIGHTED_LOSSES, head_training_loss, validate_complete_training_batch
 from a3_ultrasound.schema import InterfaceBatch
 from a3_ultrasound.selection import GuardedSelector
 from a3_ultrasound.stream_metrics import PredictionAccumulator
@@ -466,6 +466,8 @@ def run_training(model_config: ModelConfig, config: TrainingConfig,
     _validate_training_config(config)
     if data_kind not in ("synthetic", "real"):
         raise ValueError("data_kind must be synthetic or real.")
+    if config.v185_loss in R1_WEIGHTED_LOSSES:
+        raise ValueError("R1 fitting requires the streaming frozen-encoder entry.")
     if data_kind == "real":
         if not config.real_training_permitted:
             raise ValueError("Real training remains GATED; explicit approved config is required.")
@@ -669,6 +671,12 @@ def run_from_config(path: Path, output_dir: Path, *, head_type: str | None = Non
         model_values["head_type"] = head_type
     model_config = ModelConfig(**model_values)
     training_config = TrainingConfig(**config.get("training", {}))
+    if (training_config.v185_loss in R1_WEIGHTED_LOSSES
+            or config.get("r1_frozen_encoder") is not None):
+        raise ValueError("R1 fitting requires the streaming frozen-encoder entry.")
+    loaded = None if checkpoint_path is None else load_checkpoint(checkpoint_path, device=training_config.device)
+    if loaded is not None and loaded[1]["resolved_config"].get("r1_frozen_encoder") is not None:
+        raise ValueError("R1 development checkpoints use the streaming development outputs.")
     data_config = config["data"]
     if data_config["source"] == "synthetic":
         datasets = synthetic_datasets(training_config.seed, data_config.get("samples_per_split", 8))
@@ -682,7 +690,7 @@ def run_from_config(path: Path, output_dir: Path, *, head_type: str | None = Non
     if checkpoint_path is None:
         return run_training(model_config, training_config, datasets, output_dir,
                             data_kind=manifest["data_kind"], input_manifest=manifest)
-    model, checkpoint = load_checkpoint(checkpoint_path, device=training_config.device)
+    model, checkpoint = loaded
     if asdict(model_config) != asdict(ModelConfig(**checkpoint["resolved_config"]["model"])):
         raise ValueError("Evaluation model config must match checkpoint; no ignored Head overrides.")
     if evaluate_split == "test" and manifest["data_kind"] == "real" and not training_config.outer_evaluation_permitted:

@@ -25,6 +25,7 @@ class PCCLossOutput:
     per_sample_chain: Tensor
     per_sample_local: Tensor
     supervised_sample_mask: Tensor
+    weight_summary: Tensor | None = None
 
 
 def pcc_training_loss(
@@ -147,6 +148,22 @@ def validate_complete_training_batch(batch: InterfaceBatch) -> None:
     validate_prefix_states(batch.y, batch.interface_mask)
 
 
+R1_WEIGHTED_LOSSES = ("easy_normal", "single_upstream")
+
+
+def r1_supervision_weights(logits: Tensor, target: Tensor, mask: Tensor, loss: str) -> Tensor:
+    """Return detached weights over valid training interfaces, before dividing by K."""
+    if loss == "easy_normal":
+        # log P(all normal) is a sum over valid independent Bernoulli outputs.
+        log_normal = (F.logsigmoid(-logits.detach()) * mask).sum(dim=1, keepdim=True)
+        is_normal = ~target.bool().any(dim=1, keepdim=True)
+        return torch.where(is_normal, 0.5 - 0.5 * torch.expm1(log_normal), 1.0) * mask
+    if loss == "single_upstream":
+        upstream = target.cumsum(dim=1) - target
+        return (1.0 + 0.5 * (upstream == 1)) * mask
+    raise ValueError(f"Unknown R1 weighting: {loss}")
+
+
 def head_training_loss(output: HeadStepOutput, batch: InterfaceBatch, *, head_type: str,
                        lambda_local: float = 0.3,
                        positive_class_weight: float | Tensor | None = None,
@@ -167,7 +184,7 @@ def head_training_loss(output: HeadStepOutput, batch: InterfaceBatch, *, head_ty
     elif lambda_local not in (0.1, 0.3, 1.0):
         raise ValueError("Main lambda_local candidates are 0.1, 0.3, 1.0; zero requires explicit ablation.")
     effective_lambda = 0.0 if head_type == "local_independent" else lambda_local
-    if v185_loss not in ("nll", "weighted", "additive", "exchange"):
+    if v185_loss not in ("nll", "weighted", "additive", "exchange", *R1_WEIGHTED_LOSSES):
         raise ValueError("Unknown v185_loss")
     if v185_loss != "nll" and (head_type != "local_independent" or positive_class_weight is not None):
         raise ValueError("v1.8.5 comparisons require an independent head and an unweighted base loss.")
@@ -179,6 +196,19 @@ def head_training_loss(output: HeadStepOutput, batch: InterfaceBatch, *, head_ty
     mask = batch.interface_mask
     if batch.label_mask is not None and not torch.equal(mask, batch.label_mask):
         raise ValueError("v1.8.5 needs complete reliable labels.")
+    if v185_loss in R1_WEIGHTED_LOSSES:
+        logits = output.logits.float().masked_fill(~mask, 0.0)
+        target = batch.y.masked_fill(~mask, 0).float()
+        weights = r1_supervision_weights(logits, target, mask, v185_loss)
+        point_weights = weights / mask.sum(dim=1, keepdim=True)
+        terms = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+        per_point = (terms * point_weights).sum(dim=1)
+        weight_total = point_weights.sum()
+        objective = per_point.sum() / weight_total
+        changed = (weights != 1.0) & mask
+        summary = torch.stack((weight_total, mask.sum(), changed.sum(), weights.sum())).detach()
+        return replace(result, total=objective, chain=objective,
+                       per_sample_chain=per_point, weight_summary=summary)
     if v185_loss == "weighted":
         if not layer_weights or any(not math.isfinite(x) or x <= 0 for x in layer_weights):
             raise ValueError("Supply finite positive weights from the training entities.")

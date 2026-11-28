@@ -158,6 +158,8 @@ def _guarded_checkpoint(cfg, config, run, *, device):
         raise ValueError("Guarded receipt and active cell, frozen panel or weights disagree.")
     c = torch.load(path, map_location=device, weights_only=True)
     resolved = c["resolved_config"]
+    if resolved.get("r1_frozen_encoder") is not None:
+        raise ValueError("R1 development checkpoints cannot enter V1.7.1 evaluation.")
     guarded = c["selection_state"]["guarded"]
     expected_model = asdict(ModelConfig(**dict(cfg["model"], head_type=receipt["cell"]["head"])))
     if (not guarded or guarded != receipt["guarded"] or guarded["epoch"] != c["epoch"]
